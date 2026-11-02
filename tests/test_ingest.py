@@ -108,12 +108,14 @@ def test_all_source_text_is_covered(chunks: list[Chunk]) -> None:
         assert para in joined
 
 
-def test_skips_unsupported_and_hidden_files(tmp_path: Path) -> None:
+def test_skips_unsupported_hidden_and_readme_files(tmp_path: Path) -> None:
     corpus = tmp_path / "corpus_x"
     corpus.mkdir()
     (corpus / "doc.txt").write_text("Hello.")
     (corpus / "image.png").write_bytes(b"\x89PNG")
     (corpus / ".hidden.md").write_text("# Secret\n\nSkip me.")
+    (corpus / "README.md").write_text("# About this corpus\n\nSkip me.")
+    (tmp_path / "readme.txt").write_text("Skip me as well.")
     hidden_dir = tmp_path / ".cache"
     hidden_dir.mkdir()
     (hidden_dir / "cached.txt").write_text("Skip me too.")

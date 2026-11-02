@@ -13,7 +13,13 @@ dist/
 .pytest_cache/
 .ruff_cache/
 
-# Local data, vector store, and report output
-/data/
+# Local data, vector store, and report output.
+# data/ is ignored except the synthetic demo corpus, so real documents
+# placed there are never committed by accident.
+/data/*
+!/data/README.md
+!/data/handbook/
+!/data/handbook_poisoned/
+!/data/restricted/
 /chroma/
 /reports/

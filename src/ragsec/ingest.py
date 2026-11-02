@@ -16,6 +16,8 @@ CHUNK_OVERLAP = 120
 TEXT_SUFFIXES = {".md", ".txt"}
 PDF_SUFFIXES = {".pdf"}
 SUPPORTED_SUFFIXES = TEXT_SUFFIXES | PDF_SUFFIXES
+# Documentation about a corpus, not part of it.
+SKIPPED_NAMES = {"readme.md", "readme.txt"}
 
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
 _MD_HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
@@ -38,7 +40,7 @@ def ingest_directory(
     """Load every supported file under `path` and return its chunks.
 
     Files are processed in sorted path order so output is deterministic.
-    Hidden files and folders (names starting with ".") are skipped.
+    Hidden files and folders (names starting with ".") and README files are skipped.
     """
     root = Path(path)
     if not root.is_dir():
@@ -47,6 +49,8 @@ def ingest_directory(
     chunks: list[Chunk] = []
     for file in sorted(root.rglob("*")):
         if not file.is_file() or file.suffix.lower() not in SUPPORTED_SUFFIXES:
+            continue
+        if file.name.lower() in SKIPPED_NAMES:
             continue
         if any(part.startswith(".") for part in file.relative_to(root).parts):
             continue
