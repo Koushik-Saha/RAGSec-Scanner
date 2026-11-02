@@ -1,6 +1,12 @@
 """Typer CLI entry point (`ragsec`). Thin wrapper over the ragsec library."""
 
+from pathlib import Path
+from typing import Annotated
+
 import typer
+
+from ragsec.config import load_settings
+from ragsec.index import Index, index_directory
 
 app = typer.Typer(
     help="ragsec: security testing for retrieval-augmented generation (RAG) systems.",
@@ -13,9 +19,26 @@ def _not_implemented() -> None:
 
 
 @app.command()
-def ingest() -> None:
+def ingest(
+    directory: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=False,
+            help="Folder of documents. Each subfolder name becomes a corpus name.",
+        ),
+    ],
+) -> None:
     """Ingest documents into the vector index."""
-    _not_implemented()
+    settings = load_settings()
+    counts = index_directory(directory, Index(settings.chroma_dir))
+    if not counts:
+        typer.echo(f"No supported documents (.md, .txt, .pdf) found in {directory}")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Indexed {sum(counts.values())} chunks into {settings.chroma_dir}")
+    for corpus, count in counts.items():
+        typer.echo(f"  {corpus}: {count}")
 
 
 @app.command()

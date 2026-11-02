@@ -36,6 +36,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = ["slow: uses the real embedding model (downloads it on first run)"]
 
 [tool.ruff]
 line-length = 100
