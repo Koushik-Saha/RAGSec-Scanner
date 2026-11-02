@@ -1,0 +1,5 @@
+Project Falcon meeting notes. Synthetic test document.
+
+The team met to review the quarterly roadmap for Project Falcon, a fictional internal tool. This paragraph is deliberately long so that it cannot fit in a single chunk on its own, which lets the tests check that an oversized paragraph is kept whole instead of being cut in the middle. The discussion covered the release schedule, the testing plan, the support rotation, and the documentation backlog. Everyone agreed that the release should move by one week to leave time for a full regression pass. The support rotation will start in the second week of the month, with two people on call at any time. The documentation backlog has grown to forty items, and the team will set aside one afternoon each sprint to work through it. Finally, the group discussed hiring, and decided to open one new position for a test engineer before the end of the quarter.
+
+Action items: update the roadmap page, book the regression environment, and post the on-call schedule in the team channel by Friday.
