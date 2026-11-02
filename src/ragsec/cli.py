@@ -3,8 +3,10 @@
 from pathlib import Path
 from typing import Annotated
 
+import anthropic
 import typer
 
+from ragsec.answer import ConfigError, answer
 from ragsec.config import load_settings
 from ragsec.index import Index, index_directory
 
@@ -42,9 +44,28 @@ def ingest(
 
 
 @app.command()
-def ask() -> None:
+def ask(
+    question: Annotated[str, typer.Argument(help="The question to ask.")],
+    corpus: Annotated[str | None, typer.Option(help="Only retrieve from this corpus.")] = None,
+    k: Annotated[int, typer.Option("--top-k", "-k", min=1, help="Chunks to retrieve.")] = 5,
+) -> None:
     """Ask a question and get a cited answer."""
-    _not_implemented()
+    settings = load_settings()
+    try:
+        result = answer(question, corpus=corpus, k=k, settings=settings)
+    except ConfigError as exc:
+        typer.echo(f"Configuration error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    except anthropic.APIError as exc:
+        typer.echo(f"Anthropic API error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(result.text)
+    typer.echo("")
+    typer.echo(f"Citations: {', '.join(result.citations) or '(none)'}")
+    if result.invalid_citations:
+        typer.echo(f"Invalid citations (not retrieved): {', '.join(result.invalid_citations)}")
+    typer.echo(f"Grounded: {'yes' if result.grounded else 'no'}")
 
 
 @app.command()

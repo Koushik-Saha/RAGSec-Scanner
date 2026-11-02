@@ -34,7 +34,7 @@ def test_cli_help_lists_commands() -> None:
         assert command in result.output
 
 
-@pytest.mark.parametrize("command", ["ask", "scan", "report"])
+@pytest.mark.parametrize("command", ["scan", "report"])
 def test_placeholder_commands(command: str) -> None:
     result = CliRunner().invoke(app, [command])
     assert result.exit_code == 0

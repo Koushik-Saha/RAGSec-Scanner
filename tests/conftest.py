@@ -3,8 +3,13 @@ import math
 import re
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
+
+import ragsec.answer as answer_module
+import ragsec.config as config_module
 
 FIXTURE_CORPUS = Path(__file__).parent / "fixtures" / "corpus"
 
@@ -44,3 +49,50 @@ class FakeEmbedder:
 @pytest.fixture
 def fake_embedder() -> FakeEmbedder:
     return FakeEmbedder()
+
+
+# --- isolation: tests never see real config or call the real API -------------
+
+_RAGSEC_ENV = ["ANTHROPIC_API_KEY", "RAGSEC_MODEL", "RAGSEC_DATA_DIR", "RAGSEC_CHROMA_DIR"]
+REAL_MAKE_CLIENT = answer_module.make_client
+
+
+@pytest.fixture(autouse=True)
+def _isolate_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _RAGSEC_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config_module, "load_dotenv", lambda **_: False)
+
+    def _no_real_client(*_: Any, **__: Any) -> Any:
+        raise AssertionError("tests must not build a real Anthropic client; inject FakeClient")
+
+    monkeypatch.setattr(answer_module, "make_client", _no_real_client)
+
+
+# --- fake Anthropic client ---------------------------------------------------
+
+
+class FakeMessages:
+    def __init__(self, text: str, stop_reason: str, extra_blocks: list[Any]) -> None:
+        self.text = text
+        self.stop_reason = stop_reason
+        self.extra_blocks = extra_blocks
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        blocks = [*self.extra_blocks, SimpleNamespace(type="text", text=self.text)]
+        return SimpleNamespace(content=blocks, stop_reason=self.stop_reason)
+
+
+class FakeClient:
+    """Stands in for anthropic.Anthropic: records each messages.create call."""
+
+    def __init__(
+        self, text: str, stop_reason: str = "end_turn", extra_blocks: list[Any] | None = None
+    ) -> None:
+        self.messages = FakeMessages(text, stop_reason, extra_blocks or [])
+
+    @property
+    def calls(self) -> list[dict[str, Any]]:
+        return self.messages.calls
