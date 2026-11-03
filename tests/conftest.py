@@ -1,7 +1,7 @@
 import hashlib
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -73,7 +73,12 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeMessages:
-    def __init__(self, text: str, stop_reason: str, extra_blocks: list[Any]) -> None:
+    def __init__(
+        self,
+        text: "str | Callable[[dict[str, Any]], str]",
+        stop_reason: str,
+        extra_blocks: list[Any],
+    ) -> None:
         self.text = text
         self.stop_reason = stop_reason
         self.extra_blocks = extra_blocks
@@ -81,18 +86,31 @@ class FakeMessages:
 
     def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
-        blocks = [*self.extra_blocks, SimpleNamespace(type="text", text=self.text)]
+        text = self.text(kwargs) if callable(self.text) else self.text
+        blocks = [*self.extra_blocks, SimpleNamespace(type="text", text=text)]
         return SimpleNamespace(content=blocks, stop_reason=self.stop_reason)
 
 
 class FakeClient:
-    """Stands in for anthropic.Anthropic: records each messages.create call."""
+    """Stands in for anthropic.Anthropic: records each messages.create call.
+
+    `text` is the reply, or a function of the request kwargs that returns it.
+    """
 
     def __init__(
-        self, text: str, stop_reason: str = "end_turn", extra_blocks: list[Any] | None = None
+        self,
+        text: "str | Callable[[dict[str, Any]], str]",
+        stop_reason: str = "end_turn",
+        extra_blocks: list[Any] | None = None,
     ) -> None:
         self.messages = FakeMessages(text, stop_reason, extra_blocks or [])
 
     @property
     def calls(self) -> list[dict[str, Any]]:
         return self.messages.calls
+
+
+def context_chunk_ids(request: dict[str, Any]) -> list[str]:
+    """Chunk IDs the model was shown in a messages.create request, in order."""
+    content = request["messages"][0]["content"]
+    return re.findall(r'<chunk number="\d+" id="([^"]+)">', content)
