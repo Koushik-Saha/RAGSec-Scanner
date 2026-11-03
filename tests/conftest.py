@@ -53,7 +53,13 @@ def fake_embedder() -> FakeEmbedder:
 
 # --- isolation: tests never see real config or call the real API -------------
 
-_RAGSEC_ENV = ["ANTHROPIC_API_KEY", "RAGSEC_MODEL", "RAGSEC_DATA_DIR", "RAGSEC_CHROMA_DIR"]
+_RAGSEC_ENV = [
+    "ANTHROPIC_API_KEY",
+    "RAGSEC_MODEL",
+    "RAGSEC_DATA_DIR",
+    "RAGSEC_CHROMA_DIR",
+    "RAGSEC_REPORTS_DIR",
+]
 REAL_MAKE_CLIENT = answer_module.make_client
 
 

@@ -9,6 +9,7 @@ def test_defaults_when_env_empty() -> None:
     assert s.model is None
     assert s.data_dir == Path("./data")
     assert s.chroma_dir == Path("./chroma")
+    assert s.reports_dir == Path("./reports")
     assert s.embedding_model == EMBEDDING_MODEL
 
 
@@ -19,6 +20,7 @@ def test_reads_values_from_env() -> None:
             "RAGSEC_MODEL": "some-model",
             "RAGSEC_DATA_DIR": "/tmp/d",
             "RAGSEC_CHROMA_DIR": "/tmp/c",
+            "RAGSEC_REPORTS_DIR": "/tmp/r",
         }
     )
     assert s.anthropic_api_key is not None
@@ -26,6 +28,7 @@ def test_reads_values_from_env() -> None:
     assert s.model == "some-model"
     assert s.data_dir == Path("/tmp/d")
     assert s.chroma_dir == Path("/tmp/c")
+    assert s.reports_dir == Path("/tmp/r")
 
 
 def test_api_key_not_exposed_in_repr() -> None:

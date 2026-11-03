@@ -7,18 +7,15 @@ import anthropic
 import typer
 
 from ragsec.answer import ConfigError, answer
-from ragsec.config import load_settings
+from ragsec.config import Settings, load_settings
 from ragsec.index import Index, index_directory
-from ragsec.scan import format_summary, run_scan
+from ragsec.report import report_dir_name, write_reports
+from ragsec.scan import ScanResult, format_summary, run_scan
 
 app = typer.Typer(
     help="ragsec: security testing for retrieval-augmented generation (RAG) systems.",
     no_args_is_help=True,
 )
-
-
-def _not_implemented() -> None:
-    typer.echo("not implemented yet")
 
 
 @app.command()
@@ -69,25 +66,25 @@ def ask(
     typer.echo(f"Grounded: {'yes' if result.grounded else 'no'}")
 
 
-@app.command()
-def scan(
-    data_dir: Annotated[
-        Path | None,
-        typer.Option(
-            exists=True,
-            file_okay=False,
-            help="Folder holding the corpus folders. Default: RAGSEC_DATA_DIR (./data).",
-        ),
-    ] = None,
-    probe: Annotated[
-        list[str] | None,
-        typer.Option("--probe", "-p", help="Run only this probe ID (repeatable)."),
-    ] = None,
-) -> None:
-    """Run the security probes against the RAG pipeline."""
-    settings = load_settings()
+DataDirOption = Annotated[
+    Path | None,
+    typer.Option(
+        exists=True,
+        file_okay=False,
+        help="Folder holding the corpus folders. Default: RAGSEC_DATA_DIR (./data).",
+    ),
+]
+ProbeOption = Annotated[
+    list[str] | None,
+    typer.Option("--probe", "-p", help="Run only this probe ID (repeatable)."),
+]
+
+
+def _run_scan_or_exit(
+    settings: Settings, data_dir: Path | None, probe: list[str] | None
+) -> ScanResult:
     try:
-        result = run_scan(data_dir or settings.data_dir, probe_ids=probe, settings=settings)
+        return run_scan(data_dir or settings.data_dir, probe_ids=probe, settings=settings)
     except ConfigError as exc:
         typer.echo(f"Configuration error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
@@ -98,10 +95,32 @@ def scan(
         typer.echo(f"Anthropic API error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+
+@app.command()
+def scan(data_dir: DataDirOption = None, probe: ProbeOption = None) -> None:
+    """Run the security probes against the RAG pipeline."""
+    result = _run_scan_or_exit(load_settings(), data_dir, probe)
     typer.echo(format_summary(result))
 
 
 @app.command()
-def report() -> None:
-    """Generate the security report."""
-    _not_implemented()
+def report(
+    data_dir: DataDirOption = None,
+    probe: ProbeOption = None,
+    out_dir: Annotated[
+        Path | None,
+        typer.Option(
+            file_okay=False,
+            help="Where to write the reports. Default: RAGSEC_REPORTS_DIR/<timestamp>/.",
+        ),
+    ] = None,
+) -> None:
+    """Run a scan and write report.json and report.html."""
+    settings = load_settings()
+    result = _run_scan_or_exit(settings, data_dir, probe)
+    target = out_dir or settings.reports_dir / report_dir_name(result.timestamp)
+    paths = write_reports(result, target)
+
+    typer.echo(f"Score: {result.passed}/{result.total} ({result.score:.0%})")
+    typer.echo(f"JSON report: {paths.json_path}")
+    typer.echo(f"HTML report: {paths.html_path}")

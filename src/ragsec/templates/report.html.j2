@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{# Backstop behind autoescaping: no scripts, no external loads of any kind. #}
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>{{ tool_name }} report: {{ scan.passed }}/{{ scan.total }}</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1c1c1a; --muted: #5f5f5a;
+    --border: #dddcd6; --code-bg: #f1f0ec;
+    --pass: #1f7a3d; --pass-bg: #e3f3e8; --fail: #b42318; --fail-bg: #fde8e6;
+    --error: #8a5a00; --error-bg: #fdf1d8; --bar: #1f7a3d; --bar-track: #e6e5df;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --text: #ececea; --muted: #a3a39d;
+      --border: #3a3a36; --code-bg: #2a2a27;
+      --pass: #6fcf8e; --pass-bg: #18341f; --fail: #ff8a80; --fail-bg: #3d1c19;
+      --error: #f2c46d; --error-bg: #3a2e14; --bar: #4cae6d; --bar-track: #33332f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 36px 0 12px; }
+  h3 { font-size: 16px; margin: 0; }
+  .muted { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+  .meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 16px 0 0; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; overflow-wrap: anywhere; }
+  .score { display: flex; align-items: baseline; gap: 12px; margin-top: 20px; }
+  .score .big { font-size: 40px; font-weight: 700; line-height: 1; }
+  .bar { height: 14px; background: var(--bar-track); border-radius: 7px; overflow: hidden; margin-top: 12px; }
+  .bar > span { display: block; height: 100%; background: var(--bar); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 13px; color: var(--muted); font-weight: 600; }
+  td a { color: inherit; }
+  .badge {
+    display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .04em;
+    padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+  }
+  .badge.pass { color: var(--pass); background: var(--pass-bg); }
+  .badge.fail { color: var(--fail); background: var(--fail-bg); }
+  .badge.error { color: var(--error); background: var(--error-bg); }
+  .probe { margin-top: 14px; }
+  .probe header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .probe .cat { font-size: 13px; }
+  .field { margin-top: 12px; }
+  .field > .label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .field > .value { margin-top: 2px; }
+  pre {
+    margin: 4px 0 0; padding: 10px 12px; background: var(--code-bg); border-radius: 6px;
+    white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  ul.ids { margin: 4px 0 0; padding-left: 18px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .step { border-top: 1px dashed var(--border); margin-top: 12px; padding-top: 10px; }
+  .verdict { margin-top: 14px; padding: 10px 12px; border-radius: 6px; }
+  .verdict.pass { background: var(--pass-bg); }
+  .verdict.fail { background: var(--fail-bg); }
+  .verdict.error { background: var(--error-bg); }
+  .scope ul { margin: 6px 0 0; padding-left: 20px; }
+  footer { margin-top: 40px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>{{ tool_name }} security report</h1>
+<div class="muted">Document and retrieval layer security scan of a RAG pipeline</div>
+
+<section class="panel" style="margin-top:20px">
+  <dl class="meta">
+    <dt>Tool</dt><dd>{{ tool_name }} {{ version }}</dd>
+    <dt>Run at</dt><dd>{{ run_at }}</dd>
+    <dt>Model</dt><dd>{{ scan.model }}</dd>
+    <dt>Corpus</dt><dd>{{ scan.corpus_dir }}</dd>
+  </dl>
+  <div class="score">
+    <span class="big">{{ scan.passed }}/{{ scan.total }}</span>
+    <span class="muted">probes passed ({{ "%.0f" | format(scan.score * 100) }}%)</span>
+  </div>
+  <div class="bar" role="img" aria-label="{{ scan.passed }} of {{ scan.total }} probes passed"><span style="width: {{ "%.1f" | format(scan.score * 100) }}%"></span></div>
+  {% if errors %}
+  <p class="muted" style="margin:12px 0 0">{{ errors }} probe(s) could not complete and count as not passed. Re-run them before drawing conclusions.</p>
+  {% endif %}
+</section>
+
+<h2>Summary</h2>
+<div class="panel" style="padding:4px 8px">
+<table>
+  <thead><tr><th>#</th><th>Probe</th><th>Category</th><th>Result</th></tr></thead>
+  <tbody>
+  {% for p in probes %}
+    <tr>
+      <td>{{ p.number }}</td>
+      <td><a href="#probe-{{ p.number }}">{{ p.result.name }}</a></td>
+      <td class="muted">{{ p.result.category }}</td>
+      <td><span class="badge {{ p.status }}">{{ p.status | upper }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>What this does and does not test</h2>
+<section class="panel scope">
+  <p style="margin:0">This report tests the <strong>document and retrieval layer</strong> of a retrieval-augmented generation (RAG) system with {{ probe_count }} probes: instructions hidden in documents and titles, planted-secret extraction, leakage across documents and corpora, corpus poisoning, system-prompt extraction, ungrounded answers, citation integrity, and over-refusal. Verdicts come from deterministic checks (canary tokens, citation IDs, refusal phrases, fixed markers), not from another model's opinion.</p>
+  <ul>
+    <li>It is <strong>not</strong> a full penetration test. It does not cover the network, authentication, the hosting environment, prompt-level jailbreaks, or the model itself.</li>
+    <li>Passing is <strong>not</strong> a security guarantee. A pass means this system resisted these specific attacks on this synthetic corpus in this run; model answers vary between runs.</li>
+  </ul>
+</section>
+
+<h2>Probe results</h2>
+{% for p in probes %}
+{% set e = p.result.evidence %}
+<section class="panel probe" id="probe-{{ p.number }}">
+  <header>
+    <h3>{{ p.number }}. {{ p.result.name }}</h3>
+    <span class="badge {{ p.status }}">{{ p.status | upper }}</span>
+  </header>
+  <div class="cat muted">{{ p.result.category }} · <code>{{ p.result.probe_id }}</code></div>
+
+  {% if p.result.error %}
+  <div class="field"><div class="label">Error</div><pre>{{ p.result.error }}</pre></div>
+  {% elif e.steps %}
+    {% for s in p.steps %}
+    <div class="step">
+      <div class="field"><div class="label">Step {{ loop.index }}{% if s.step.corpus %} · scope: {{ s.step.corpus }}{% endif %}</div><div class="value">{{ s.step.question }}</div></div>
+      <div class="field"><div class="label">Retrieved chunks ({{ s.step.retrieved_chunk_ids | length }})</div>
+        {% if s.step.retrieved_chunk_ids %}<ul class="ids">{% for cid in s.step.retrieved_chunk_ids %}<li>{{ cid }}</li>{% endfor %}</ul>{% else %}<div class="value muted">none</div>{% endif %}
+      </div>
+      {% if s.step.answer_text %}
+      <div class="field"><div class="label">Answer</div><pre>{{ s.answer }}</pre>{% if s.truncated %}<div class="muted" style="font-size:13px">Truncated; full answer in report.json.</div>{% endif %}</div>
+      {% endif %}
+      {% if s.step.note %}<div class="field"><div class="label">Check</div><div class="value">{{ s.step.note }}</div></div>{% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+  <div class="field"><div class="label">Question{% if e.corpus %} · scope: {{ e.corpus }}{% endif %}</div><div class="value">{{ e.question }}</div></div>
+  <div class="field"><div class="label">Retrieved chunks ({{ e.retrieved_chunk_ids | length }}){% if e.attack_retrieved is not none %} · attack document {{ "retrieved" if e.attack_retrieved else "NOT retrieved" }}{% endif %}</div>
+    {% if e.retrieved_chunk_ids %}<ul class="ids">{% for cid in e.retrieved_chunk_ids %}<li>{{ cid }}</li>{% endfor %}</ul>{% else %}<div class="value muted">none</div>{% endif %}
+  </div>
+  <div class="field"><div class="label">Answer</div><pre>{{ p.answer }}</pre>{% if p.truncated %}<div class="muted" style="font-size:13px">Truncated; full answer in report.json.</div>{% endif %}</div>
+  {% if e.citations %}<div class="field"><div class="label">Citations</div><ul class="ids">{% for c in e.citations %}<li>{{ c }}</li>{% endfor %}</ul></div>{% endif %}
+  {% endif %}
+
+  <div class="verdict {{ p.status }}"><strong>Verdict:</strong> {{ e.verdict_reason }}</div>
+</section>
+{% endfor %}
+
+<footer class="muted">
+  Generated by {{ tool_name }} {{ version }}. Full machine-readable results are in report.json next to this file.
+  All corpus content is synthetic.
+</footer>
+
+</main>
+</body>
+</html>

@@ -32,10 +32,3 @@ def test_cli_help_lists_commands() -> None:
     assert result.exit_code == 0
     for command in COMMANDS:
         assert command in result.output
-
-
-@pytest.mark.parametrize("command", ["report"])
-def test_placeholder_commands(command: str) -> None:
-    result = CliRunner().invoke(app, [command])
-    assert result.exit_code == 0
-    assert "not implemented yet" in result.output
