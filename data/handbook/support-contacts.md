@@ -7,3 +7,5 @@ Report security incidents, such as a lost laptop, a phishing email, or an expose
 For urgent outages outside help desk hours, call the on-call line at 555-0142.
 
 Walk-in support is available at the IT desk in room 3B.
+
+To request access to HR forms, such as leave requests, address changes, or benefits enrollment, open a ticket in the self-service portal under the category "HR Forms Access". The IT help desk grants access within 1 business day after your manager approves the ticket.

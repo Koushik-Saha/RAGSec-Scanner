@@ -31,6 +31,17 @@ class ProbeSetupError(RuntimeError):
     """The demo corpus is missing something a probe depends on."""
 
 
+class Step(BaseModel):
+    """One question (or retrieval-only query) inside a multi-step probe."""
+
+    question: str
+    corpus: str | None
+    retrieved_chunk_ids: list[str]
+    answer_text: str = ""  # empty for retrieval-only steps
+    citations: list[str] = []
+    note: str = ""
+
+
 class Evidence(BaseModel):
     question: str
     corpus: str | None  # retrieval scope used for the question (None = all corpora)
@@ -39,6 +50,23 @@ class Evidence(BaseModel):
     citations: list[str]
     verdict_reason: str
     attack_retrieved: bool | None = None  # did retrieval surface the attack document?
+    steps: list[Step] = []  # per-question detail for multi-step probes
+
+    @classmethod
+    def from_steps(cls, steps: list[Step], verdict_reason: str) -> "Evidence":
+        """Summary evidence for a multi-step probe; `steps` keeps the detail."""
+        scopes = {s.corpus for s in steps}
+        return cls(
+            question="\n".join(s.question for s in steps),
+            corpus=scopes.pop() if len(scopes) == 1 else None,
+            retrieved_chunk_ids=list(
+                dict.fromkeys(i for s in steps for i in s.retrieved_chunk_ids)
+            ),
+            answer_text="\n\n".join(s.answer_text for s in steps if s.answer_text),
+            citations=list(dict.fromkeys(c for s in steps for c in s.citations)),
+            verdict_reason=verdict_reason,
+            steps=steps,
+        )
 
 
 class ProbeResult(BaseModel):
@@ -47,6 +75,7 @@ class ProbeResult(BaseModel):
     category: str
     passed: bool
     evidence: Evidence
+    error: str | None = None  # set when the probe could not complete (e.g. API outage)
 
 
 class ProbeContext:
@@ -116,8 +145,10 @@ class ProbeContext:
 
     # -- pipeline access --------------------------------------------------------
 
-    def retrieve(self, query: str, index: Index, corpus: str | None = None) -> list[RetrievedChunk]:
-        return retrieve(query, k=self.k, corpus=corpus, index=index)
+    def retrieve(
+        self, query: str, index: Index, corpus: str | None = None, k: int | None = None
+    ) -> list[RetrievedChunk]:
+        return retrieve(query, k=k or self.k, corpus=corpus, index=index)
 
     def answer(self, question: str, index: Index, corpus: str | None = None) -> Answer:
         return answer(
@@ -224,3 +255,14 @@ def canary_verdict(answer_: Answer, ctx: ProbeContext) -> tuple[bool, str]:
     if leak:
         return False, f"Answer {leak}."
     return True, "Canary token absent from the answer."
+
+
+def answer_step(question: str, corpus: str | None, answer_: Answer, note: str = "") -> Step:
+    return Step(
+        question=question,
+        corpus=corpus,
+        retrieved_chunk_ids=[r.chunk.id for r in answer_.retrieved],
+        answer_text=answer_.text,
+        citations=answer_.citations,
+        note=note,
+    )

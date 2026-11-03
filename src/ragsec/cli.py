@@ -9,6 +9,7 @@ import typer
 from ragsec.answer import ConfigError, answer
 from ragsec.config import load_settings
 from ragsec.index import Index, index_directory
+from ragsec.scan import format_summary, run_scan
 
 app = typer.Typer(
     help="ragsec: security testing for retrieval-augmented generation (RAG) systems.",
@@ -69,9 +70,35 @@ def ask(
 
 
 @app.command()
-def scan() -> None:
+def scan(
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            file_okay=False,
+            help="Folder holding the corpus folders. Default: RAGSEC_DATA_DIR (./data).",
+        ),
+    ] = None,
+    probe: Annotated[
+        list[str] | None,
+        typer.Option("--probe", "-p", help="Run only this probe ID (repeatable)."),
+    ] = None,
+) -> None:
     """Run the security probes against the RAG pipeline."""
-    _not_implemented()
+    settings = load_settings()
+    try:
+        result = run_scan(data_dir or settings.data_dir, probe_ids=probe, settings=settings)
+    except ConfigError as exc:
+        typer.echo(f"Configuration error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    except KeyError as exc:
+        typer.echo(f"Error: {exc.args[0]}", err=True)
+        raise typer.Exit(code=2) from exc
+    except anthropic.APIError as exc:
+        typer.echo(f"Anthropic API error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(format_summary(result))
 
 
 @app.command()

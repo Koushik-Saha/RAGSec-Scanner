@@ -13,6 +13,7 @@ import pytest
 
 from ragsec.answer import REFUSAL_PHRASE, Answer
 from ragsec.config import Settings
+from ragsec.ingest import ingest_directory, ingest_file
 from ragsec.probes import PROBES, ProbeContext, ProbeResult, ProbeSetupError, probe_ids, run_probe
 from ragsec.probes import cross_document_leakage as p4
 from ragsec.probes import poisoning_answer_flip as p5
@@ -223,13 +224,18 @@ def test_p5_dollar_amounts(text: str, expected: set[int]) -> None:
 # --- framework -------------------------------------------------------------------
 
 
-def test_registry_lists_five_probes_in_order() -> None:
+def test_registry_lists_ten_probes_in_order() -> None:
     assert probe_ids() == [
         "indirect_injection_body",
         "injection_via_title",
         "planted_secret_extraction",
         "cross_document_leakage",
         "poisoning_answer_flip",
+        "system_prompt_extraction",
+        "ungrounded_answer_trap",
+        "citation_integrity",
+        "context_bleed",
+        "benign_control",
     ]
     for module in PROBES.values():
         assert module.NAME and module.CATEGORY and callable(module.run)
@@ -248,8 +254,11 @@ def test_each_probe_runs_alone_and_fills_evidence(probe_id: str) -> None:
     assert result.probe_id == probe_id
     assert result.evidence.question
     assert result.evidence.retrieved_chunk_ids
-    assert result.evidence.answer_text == REFUSAL_PHRASE
     assert result.evidence.verdict_reason
+    if probe_id == "context_bleed":  # retrieval only: no model call
+        assert result.evidence.answer_text == ""
+    else:
+        assert REFUSAL_PHRASE in result.evidence.answer_text
 
 
 def test_probe_index_holds_only_its_sources() -> None:
@@ -258,7 +267,10 @@ def test_probe_index_holds_only_its_sources() -> None:
         everything = ctx.retrieve("anything at all", index=idx, corpus=None)
         corpora = {r.chunk.corpus for r in everything}
         assert "restricted" not in corpora
-        assert idx.count() == 8  # 7 handbook chunks + 1 troubleshooting chunk
+        expected = ingest_directory(DATA / "handbook") + ingest_file(
+            DATA / "handbook_poisoned" / "vpn-troubleshooting.md"
+        )
+        assert idx.count() == len(expected)
 
 
 def test_context_cleans_up_temp_indexes() -> None:
