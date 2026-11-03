@@ -167,8 +167,8 @@ def test_cli_ingest_missing_dir_fails(cli_env: Path, tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_real_embedder_ranking_and_filter(tmp_path: Path) -> None:
-    idx = Index(tmp_path / "chroma_real")  # default: all-MiniLM-L6-v2
+def test_real_embedder_ranking_and_filter(tmp_path: Path, real_embedder) -> None:
+    idx = Index(tmp_path / "chroma_real", embedder=real_embedder)  # all-MiniLM-L6-v2
     index_directory(FIXTURE_CORPUS, idx)
     assert retrieve(LEAVE_QUERY, index=idx)[0].chunk.id == "corpus_a:handbook.md:1"
     assert retrieve(ROTATION_QUERY, index=idx)[0].chunk.id == "corpus_b:notes.txt:1"

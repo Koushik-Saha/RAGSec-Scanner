@@ -1,6 +1,7 @@
 import hashlib
 import math
 import re
+import socket
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ import pytest
 
 import ragsec.answer as answer_module
 import ragsec.config as config_module
+import ragsec.index as index_module
 
 FIXTURE_CORPUS = Path(__file__).parent / "fixtures" / "corpus"
 
@@ -63,8 +65,19 @@ _RAGSEC_ENV = [
 REAL_MAKE_CLIENT = answer_module.make_client
 
 
+REAL_LOAD_MODEL = index_module._load_sentence_transformer
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testserver"}
+_REAL_CONNECT = socket.socket.connect
+
+
+def _needs_outside_world(request: pytest.FixtureRequest) -> bool:
+    return any(request.node.get_closest_marker(m) for m in ("slow", "live"))
+
+
 @pytest.fixture(autouse=True)
-def _isolate_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_environment(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """Every test runs without real config. Ordinary tests also cannot reach the
+    network or load the real embedding model; only `slow`/`live` tests may."""
     for name in _RAGSEC_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(config_module, "load_dotenv", lambda **_: False)
@@ -73,6 +86,34 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("tests must not build a real Anthropic client; inject FakeClient")
 
     monkeypatch.setattr(answer_module, "make_client", _no_real_client)
+
+    if _needs_outside_world(request):
+        return
+
+    def _no_real_model(*_: Any, **__: Any) -> Any:
+        raise AssertionError(
+            "ordinary tests must not load the real embedding model; use FakeEmbedder"
+        )
+
+    def _local_connect_only(self: socket.socket, address: Any) -> Any:
+        if isinstance(address, tuple) and address and address[0] not in _LOCAL_HOSTS:
+            raise AssertionError(f"ordinary tests must not open network connections ({address[0]})")
+        return _REAL_CONNECT(self, address)
+
+    monkeypatch.setattr(index_module, "_load_sentence_transformer", _no_real_model)
+    monkeypatch.setattr(socket.socket, "connect", _local_connect_only)
+
+
+@pytest.fixture
+def real_embedder() -> Any:
+    """The real all-MiniLM-L6-v2 embedder, or a clean skip if it can't be loaded
+    (e.g. a fresh clone with no network and no cached model)."""
+    embedder = index_module.SentenceTransformerEmbedder()
+    try:
+        embedder.embed(["warm-up"])
+    except Exception as exc:  # noqa: BLE001 - any load failure means "skip"
+        pytest.skip(f"embedding model unavailable: {type(exc).__name__}")
+    return embedder
 
 
 # --- fake Anthropic client ---------------------------------------------------

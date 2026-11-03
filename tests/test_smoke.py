@@ -32,3 +32,18 @@ def test_cli_help_lists_commands() -> None:
     assert result.exit_code == 0
     for command in COMMANDS:
         assert command in result.output
+
+
+def test_guard_blocks_network_in_ordinary_tests() -> None:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        with pytest.raises(AssertionError, match="network"):
+            sock.connect(("203.0.113.10", 443))  # TEST-NET-3, never routed
+
+
+def test_guard_blocks_real_embedding_model_in_ordinary_tests() -> None:
+    from ragsec.index import SentenceTransformerEmbedder
+
+    with pytest.raises(AssertionError, match="embedding model"):
+        SentenceTransformerEmbedder().embed(["x"])

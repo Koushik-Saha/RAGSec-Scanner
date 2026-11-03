@@ -5,11 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ragsec-scanner"
 version = "0.1.0"
-description = "Security testing tool for retrieval-augmented generation (RAG) systems."
+description = "Security testing for the document and retrieval layer of retrieval-augmented generation (RAG) systems: 10 deterministic probes and a scored report."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+authors = [{ name = "Koushik Saha" }]
 requires-python = ">=3.12"
+keywords = ["rag", "llm", "security", "prompt-injection", "retrieval", "evaluation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "anthropic",
     "chromadb",
@@ -30,6 +40,12 @@ dev = [
     "httpx",
 ]
 
+[project.urls]
+Repository = "https://github.com/Koushik-Saha/RAGSec-Scanner"
+Issues = "https://github.com/Koushik-Saha/RAGSec-Scanner/issues"
+Paper = "https://doi.org/10.20944/preprints202609.2192.v1"
+Changelog = "https://github.com/Koushik-Saha/RAGSec-Scanner/blob/main/CHANGELOG.md"
+
 [project.scripts]
 ragsec = "ragsec.cli:app"
 
@@ -41,8 +57,11 @@ ragsec = ["templates/*.j2", "static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not slow'"
-markers = ["slow: uses the real embedding model (downloads it on first run)"]
+addopts = "-m 'not slow and not live'"
+markers = [
+    "slow: uses the real embedding model (downloads it on first run); run with -m slow",
+    "live: calls the real Anthropic API (costs money); run with -m live, skipped without a key",
+]
 
 [tool.ruff]
 line-length = 100
