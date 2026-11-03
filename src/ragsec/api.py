@@ -13,10 +13,15 @@ clients need a long timeout. Only one scan runs at a time; a second request
 during a scan gets 409.
 """
 
+import base64
+import hashlib
 import logging
+import re
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import cache
+from pathlib import Path
 from typing import Any
 
 import anthropic
@@ -33,6 +38,8 @@ from ragsec.report import render_html
 from ragsec.scan import ScanResult, run_scan
 
 log = logging.getLogger("ragsec.api")
+
+DEMO_PAGE = Path(__file__).parent / "static" / "index.html"
 
 # Matches the <meta> policy inside the report, sent as a header too.
 REPORT_CSP = (
@@ -137,6 +144,12 @@ def create_app(
     )
     _register_error_handlers(app)
 
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def demo_page() -> HTMLResponse:
+        """The static demo page (vanilla HTML/CSS/JS)."""
+        html, csp = _demo_page()
+        return HTMLResponse(html, headers={"Content-Security-Policy": csp})
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -202,6 +215,23 @@ def create_app(
 
 
 # --- helpers ------------------------------------------------------------------------
+
+
+@cache
+def _demo_page() -> tuple[str, str]:
+    """The demo page and a CSP that allows only its own inline script (by hash)."""
+    html = DEMO_PAGE.read_text(encoding="utf-8")
+    scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL)
+    hashes = " ".join(
+        "'sha256-" + base64.b64encode(hashlib.sha256(s.encode()).digest()).decode() + "'"
+        for s in scripts
+    )
+    csp = (
+        f"default-src 'none'; script-src {hashes}; style-src 'unsafe-inline'; "
+        "connect-src 'self'; img-src 'none'; form-action 'self'; base-uri 'none'; "
+        "frame-ancestors 'none'"
+    )
+    return html, csp
 
 
 def _state(request: Request) -> AppState:

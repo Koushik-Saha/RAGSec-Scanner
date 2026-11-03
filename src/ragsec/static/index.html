@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ragsec-scanner demo</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1c1c1a; --muted: #5f5f5a; --border: #dddcd6;
+    --accent: #1d4ed8; --accent-text: #ffffff; --code-bg: #f1f0ec;
+    --pass: #1f7a3d; --pass-bg: #e3f3e8; --fail: #b42318; --fail-bg: #fde8e6;
+    --warn: #8a5a00; --warn-bg: #fdf1d8; --bar: #1f7a3d; --bar-track: #e6e5df;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --text: #ececea; --muted: #a3a39d; --border: #3a3a36;
+      --accent: #7aa2ff; --accent-text: #0b1020; --code-bg: #2a2a27;
+      --pass: #6fcf8e; --pass-bg: #18341f; --fail: #ff8a80; --fail-bg: #3d1c19;
+      --warn: #f2c46d; --warn-bg: #3a2e14; --bar: #4cae6d; --bar-track: #33332f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 820px; margin: 0 auto; padding: 28px 16px 56px; }
+  h1 { font-size: 24px; margin: 0; }
+  .note { color: var(--muted); margin: 4px 0 24px; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 16px; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  input[type=text], select {
+    font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px;
+  }
+  input[type=text] { flex: 1 1 320px; min-width: 0; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 6px; padding: 8px 16px;
+    background: var(--accent); color: var(--accent-text); cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: progress; }
+  .status { color: var(--muted); font-size: 14px; margin-top: 10px; min-height: 1.4em; }
+  .status.error { color: var(--fail); }
+  .answer { margin-top: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code-bg); border-radius: 6px; padding: 10px 12px; }
+  .label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-top: 12px; }
+  ul.ids { margin: 4px 0 0; padding-left: 18px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .04em; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+  .badge.pass { color: var(--pass); background: var(--pass-bg); }
+  .badge.fail { color: var(--fail); background: var(--fail-bg); }
+  .badge.error { color: var(--warn); background: var(--warn-bg); }
+  .score { font-size: 32px; font-weight: 700; margin-top: 14px; }
+  .bar { height: 12px; background: var(--bar-track); border-radius: 6px; overflow: hidden; margin-top: 8px; }
+  .bar > span { display: block; height: 100%; width: 0; background: var(--bar); }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  td { padding: 7px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td.reason { color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ragsec-scanner demo</h1>
+  <p class="note">All documents here are synthetic demo data for a fictional company (Vantorra Labs).</p>
+
+  <section aria-labelledby="ask-title">
+    <h2 id="ask-title">Ask the handbook</h2>
+    <form id="ask-form" class="row">
+      <input id="question" type="text" required maxlength="2000"
+             placeholder="e.g. What is the daily meal allowance when travelling?" aria-label="Question">
+      <select id="corpus" aria-label="Corpus">
+        <option value="">All corpora</option>
+        <option value="handbook">handbook</option>
+        <option value="handbook_poisoned">handbook_poisoned</option>
+        <option value="restricted">restricted</option>
+      </select>
+      <button id="ask-button" type="submit">Ask</button>
+    </form>
+    <div id="ask-status" class="status" role="status"></div>
+    <div id="ask-result" hidden>
+      <div id="ask-text" class="answer"></div>
+      <div class="label">Citations</div>
+      <ul id="ask-citations" class="ids"></ul>
+      <div class="label">Grounded</div>
+      <div id="ask-grounded"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="scan-title">
+    <h2 id="scan-title">Run the security scan</h2>
+    <p class="note" style="margin:0 0 12px">Runs all 10 probes against the demo corpora. Takes a minute or more.</p>
+    <button id="scan-button" type="button">Run scan</button>
+    <div id="scan-status" class="status" role="status"></div>
+    <div id="scan-result" hidden>
+      <div class="score" id="scan-score"></div>
+      <div class="bar"><span id="scan-bar"></span></div>
+      <table><tbody id="scan-rows"></tbody></table>
+    </div>
+  </section>
+
+  <section aria-labelledby="report-title">
+    <h2 id="report-title">Latest HTML report</h2>
+    <a href="/report/html" target="_blank" rel="noopener">Open the latest report</a>
+    <span id="report-note" class="note"> (available after a scan has run)</span>
+  </section>
+</main>
+<script>
+"use strict";
+// Every value from the server is inserted with textContent, never as HTML.
+
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
+async function postJSON(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let data = null;
+  try { data = await response.json(); } catch (_) { /* non-JSON error body */ }
+  if (!response.ok) {
+    const detail = data && data.detail;
+    const message = typeof detail === "string" ? detail
+      : Array.isArray(detail) ? detail.map(d => d.field + ": " + d.message).join("; ")
+      : "Request failed (" + response.status + ")";
+    throw new Error(message);
+  }
+  return data;
+}
+
+function setStatus(node, message, isError) {
+  node.textContent = message;
+  node.classList.toggle("error", Boolean(isError));
+}
+
+document.getElementById("ask-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = document.getElementById("ask-button");
+  const status = document.getElementById("ask-status");
+  const result = document.getElementById("ask-result");
+  const question = document.getElementById("question").value.trim();
+  const corpus = document.getElementById("corpus").value || null;
+  if (!question) return;
+
+  button.disabled = true;
+  result.hidden = true;
+  setStatus(status, "Asking…");
+  try {
+    const data = await postJSON("/ask", { question, corpus });
+    document.getElementById("ask-text").textContent = data.text;
+    const list = document.getElementById("ask-citations");
+    list.replaceChildren(...(data.citations.length ? data.citations.map(c => el("li", c)) : [el("li", "none")]));
+    const grounded = document.getElementById("ask-grounded");
+    const label = data.grounded ? "yes" : (data.refused ? "no (refused)" : "no");
+    grounded.replaceChildren(el("span", label, "badge " + (data.grounded ? "pass" : "fail")));
+    if (data.invalid_citations.length) {
+      grounded.append(el("span", "  invalid citations: " + data.invalid_citations.join(", ")));
+    }
+    result.hidden = false;
+    setStatus(status, "");
+  } catch (error) {
+    setStatus(status, error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById("scan-button").addEventListener("click", async () => {
+  const button = document.getElementById("scan-button");
+  const status = document.getElementById("scan-status");
+  const result = document.getElementById("scan-result");
+  button.disabled = true;
+  result.hidden = true;
+  setStatus(status, "Running 10 probes… this can take a minute or more.");
+  try {
+    const data = await postJSON("/scan");
+    document.getElementById("scan-score").textContent =
+      data.passed + "/" + data.total + " passed (" + Math.round(data.score * 100) + "%)";
+    document.getElementById("scan-bar").style.width = (data.score * 100).toFixed(1) + "%";
+    const rows = data.results.map((r, i) => {
+      const kind = r.error ? "error" : (r.passed ? "pass" : "fail");
+      const tr = el("tr");
+      tr.append(el("td", String(i + 1)), el("td", r.name));
+      const badgeCell = el("td");
+      badgeCell.append(el("span", kind.toUpperCase(), "badge " + kind));
+      tr.append(badgeCell, el("td", r.evidence.verdict_reason, "reason"));
+      return tr;
+    });
+    document.getElementById("scan-rows").replaceChildren(...rows);
+    result.hidden = false;
+    document.getElementById("report-note").textContent = " (from the scan that just ran)";
+    setStatus(status, "Finished at " + data.timestamp + " with model " + data.model + ".");
+  } catch (error) {
+    setStatus(status, error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

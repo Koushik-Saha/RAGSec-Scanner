@@ -1,0 +1,34 @@
+# Mirrors .gitignore, plus files the image never needs.
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Local data, vector store, and report output.
+# Only the synthetic demo corpus is sent to the build.
+data/*
+!data/README.md
+!data/handbook/
+!data/handbook_poisoned/
+!data/restricted/
+chroma/
+reports/
+
+# Not needed in the image
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+tests/
+*.bundle

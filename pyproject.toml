@@ -35,7 +35,7 @@ ragsec = "ragsec.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ragsec = ["templates/*.j2"]
+ragsec = ["templates/*.j2", "static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
