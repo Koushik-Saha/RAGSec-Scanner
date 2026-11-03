@@ -92,6 +92,11 @@ class Index:
     def count(self) -> int:
         return self._collection.count()
 
+    def corpora(self) -> set[str]:
+        """Names of the corpora that have at least one chunk in the index."""
+        stored: Any = self._collection.get(include=["metadatas"])
+        return {meta["corpus"] for meta in stored["metadatas"] or []}
+
     def search(self, query: str, k: int, corpus: str | None = None) -> list[tuple[Chunk, float]]:
         """Nearest chunks to `query`, closest first, as (chunk, cosine distance) pairs."""
         if k < 1:
