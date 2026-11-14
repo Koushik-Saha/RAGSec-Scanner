@@ -1,114 +1,221 @@
 # Deploying ragsec-scanner
 
-Two options: **Render** (all in the browser) or **Fly.io** (command line).
-Both build the `Dockerfile` in this repository and need the same two
-environment variables:
+The demo is one Docker container: the FastAPI app, the demo page at `/`, and
+the synthetic demo corpus. It is built from the `Dockerfile` in this
+repository. **No API key is in the image or the repository**; keys are
+supplied as environment variables when the container runs.
 
-| Variable | Value | Secret? |
+Main path: **Oracle Cloud (Always Free Ampere VM) + Coolify**. Render and
+Fly.io work too (see the end).
+
+Steps marked **👤 Account owner** need the person who owns the cloud account,
+the GitHub repository, or the API key.
+
+## At a glance
+
+| Item | Value |
+|---|---|
+| Build source | `https://github.com/Koushik-Saha/RAGSec-Scanner`, branch `main`, `Dockerfile` at the repo root |
+| Container port | `8000` |
+| Health check | `GET /health` → `200 {"status":"ok"}` (the `Dockerfile` also defines a `HEALTHCHECK`) |
+| Memory | Use **2 GB or more**. Measured locally (arm64): about 560 MiB after startup, ask, and a short scan. |
+| Architecture | Builds and runs on **arm64** (verified locally) and x86_64 |
+| Startup | Indexes the demo corpus on boot; no persistent volume needed |
+
+### Environment variables (names only — never commit values)
+
+| Variable | Required? | Value |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key (`sk-ant-...`) | **Yes** — never commit it |
-| `RAGSEC_MODEL` | The Claude model to test, e.g. `claude-opus-5-5` | No |
+| `RAGSEC_PROVIDER` | Yes for Groq | `groq` (others: `anthropic` — the default, `openrouter`, `ollama`) |
+| `RAGSEC_MODEL` | Yes | Model name for that provider, e.g. `openai/gpt-oss-120b` on Groq |
+| `GROQ_API_KEY` | Yes for Groq | **Secret.** Your Groq API key |
+| `ANTHROPIC_API_KEY` | Optional | **Secret.** Only if `RAGSEC_PROVIDER=anthropic` |
+| `OPENROUTER_API_KEY` | Optional | **Secret.** Only if `RAGSEC_PROVIDER=openrouter` |
 
-Steps marked **👤 Account owner** need the person who owns the Render or
-Fly.io account, the GitHub repository, or the Anthropic API key. Everything
-else can be done by anyone following along.
+Only the selected provider's key is needed. Set keys as **runtime** variables,
+never as build arguments, so they never end up in an image layer. The
+`RAGSEC_DATA_DIR`, `RAGSEC_CHROMA_DIR`, and `RAGSEC_REPORTS_DIR` defaults are
+already set inside the image; leave them alone.
 
-## Before you start
+Before deploying, **👤** confirm the model is available to your key (Groq
+console → Models). An unavailable model makes every request fail with a 404.
 
-- **Memory: use an instance with 2 GB of RAM.** Measured locally, the
-  container uses about 830 MiB after startup and about 880 MiB after handling
-  requests (PyTorch and the embedding model). Instances with 512 MB, including
-  most free tiers, will run out of memory. 1 GB may work but leaves little
-  headroom during a scan.
-- **Startup:** about 11 seconds locally (the image includes the embedding
-  model; on boot it indexes the demo corpus). The index lives inside the
-  container and is rebuilt on every start, so no persistent disk is needed.
-- **Long requests:** a full `/scan` makes about 13 model calls and can take a
-  minute or more. If the platform's proxy times out, run probes in smaller
-  groups: `POST /scan` with `{"probe_ids": ["indirect_injection_body", "injection_via_title"]}`.
-- **👤 Cost and access — read this.** The deployed app has **no login**.
-  Anyone who finds the URL can call `/ask` and `/scan`, and every call is
-  billed to your Anthropic key. Before deploying:
-  1. **👤** In the Anthropic Console, create a **separate API key** just for
-     this deployment, so you can revoke it without affecting anything else.
-  2. **👤** In the Anthropic Console, set a **monthly spend limit** you are
-     comfortable losing.
-  3. Share the URL only with people you trust, and delete the service when the
+---
+
+## Groq free tier: the demo's ceiling
+
+The deployed app has **no login**. Anyone with the URL can call `/ask` and
+`/scan`, and every call spends your Groq key's free-tier budget.
+
+Limits reported by Groq's rate-limit headers for `openai/gpt-oss-120b` on a
+free key (checked 2026-11-14; Groq can change them, see
+<https://console.groq.com/settings/limits>):
+
+| Limit | Value | Header |
+|---|---|---|
+| Requests per day | 1,000 | `x-ratelimit-limit-requests` |
+| Tokens per minute | 8,000 | `x-ratelimit-limit-tokens` |
+
+What that means for the demo:
+
+- One `/ask` = 1 model call. One full `/scan` (all 10 probes) = 11 model
+  calls. So **at most about 90 full scans per day**, fewer when people also
+  use `/ask`.
+- **Pacing is built in.** The app shares one model client across all
+  visitors and spaces Groq requests at least 2.1 s apart (under 30 requests
+  per minute). On HTTP 429 it waits for Groq's `retry-after` (or backs off
+  2 s, doubling, up to 60 s) and retries up to 6 times. Busy periods get
+  slower, not more expensive.
+- **When the daily budget is spent**, the app stops calling Groq until the
+  `retry-after` time (or 15 minutes) has passed. `/ask` returns
+  `503 model_rate_limited`, and scan probes are recorded as ERROR.
+- **Pacing limits the rate, not the total.** At the paced maximum, someone
+  sending requests nonstop would use up the 1,000 requests/day in about 35
+  minutes. To protect the budget:
+  1. **👤** Use a **separate Groq API key** just for this demo, so you can
+     revoke it without affecting anything else.
+  2. Share the URL only with people you trust, and stop the app when the
      demo is over.
+  3. For a paid provider (`anthropic`, `openrouter`), **👤** set a spend
+     limit in that provider's console first.
+- A full `/scan` takes about a minute. If a proxy times out, run probes in
+  smaller groups: `POST /scan` with
+  `{"probe_ids": ["indirect_injection_body", "injection_via_title"]}`.
 
 ---
 
-## Option A: Render
+## Option A: Oracle Cloud + Coolify
 
-1. **👤** Sign in at <https://dashboard.render.com> (create an account if
-   needed, and add a payment method if your plan requires it; the 2 GB
-   instance is a paid instance type).
-2. Click **New +** (top right) → **Web Service**.
-3. Under **Source Code**, choose **Git Provider** → **GitHub**.
-   - **👤** If this is the first time, click **Connect GitHub** and authorize
-     Render to read `Koushik-Saha/RAGSec-Scanner`.
-   - Select the **RAGSec-Scanner** repository and click **Connect**.
-4. Fill in the settings:
-   - **Name:** `ragsec-scanner` (becomes `https://ragsec-scanner.onrender.com`
-     if available; otherwise Render adds a suffix).
-   - **Language / Runtime:** **Docker** (Render detects the `Dockerfile`).
-   - **Branch:** `main`
-   - **Region:** any; pick the one closest to you.
-   - **Root Directory:** leave empty.
-   - **Dockerfile Path:** `./Dockerfile` (the default).
-5. **Instance Type:** choose one with **2 GB RAM** (see "Before you start").
-6. **Environment Variables** → **Add Environment Variable**, three times:
-   - `ANTHROPIC_API_KEY` = your key. **👤** Only the key owner should paste
-     this.
-   - `RAGSEC_MODEL` = `claude-opus-5-5`
-   - `PORT` = `8000` — tells Render which port the container listens on.
-7. Open **Advanced** and set **Health Check Path** to `/health`.
-8. Click **Deploy Web Service** (or **Create Web Service**).
-9. Wait for the build (several minutes the first time: it installs PyTorch and
-   downloads the embedding model). The log should end with:
-   ```
-   Uvicorn running on http://0.0.0.0:8000
-   ```
-   and the status at the top should turn **Live**.
-10. Check it (replace the URL with yours):
-    ```bash
-    curl https://ragsec-scanner.onrender.com/health
-    # {"status":"ok"}
-    ```
-    Then open the URL in a browser to see the demo page, ask a question, and
-    run a scan.
+### 1. Create the VM (👤 Oracle account owner)
 
-**Updating:** every push to `main` redeploys automatically (Render's default
-"Auto-Deploy: Yes"). **Changing the key:** **Environment** tab → edit
-`ANTHROPIC_API_KEY` → **Save, rebuild, and deploy**.
-**Stopping:** **Settings** → bottom of the page → **Suspend Web Service** (or
-**Delete Web Service**).
+1. Sign in to the Oracle Cloud console. Go to **Compute → Instances →
+   Create instance**.
+2. **Image:** Canonical Ubuntu (22.04 or 24.04).
+   **Shape:** `VM.Standard.A1.Flex` (Ampere, arm64, Always Free eligible).
+   Give it at least **2 OCPUs and 12 GB memory**. Coolify needs 2 CPUs and
+   2 GB+ on its own, and the first build installs PyTorch.
+3. **Boot volume:** 50 GB or more (Docker images and build cache).
+4. Add your SSH public key, then create the instance. Note its public IP.
+
+### 2. Open the network ports
+
+Oracle blocks traffic in two places; open both.
+
+1. **VCN security list:** Instance → **Subnet** → **Security Lists** →
+   default list → **Add Ingress Rules**, source `0.0.0.0/0`, TCP, destination
+   ports `80`, `443`, and `8000`. Port 8000 is Coolify's own dashboard; you
+   can remove it later once the dashboard has a domain.
+2. **The VM's own firewall:** Oracle's Ubuntu images ship iptables rules that
+   allow only SSH. On the VM:
+   ```bash
+   sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+   sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+   sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 8000 -j ACCEPT
+   sudo netfilter-persistent save
+   ```
+
+### 3. Install Coolify
+
+```bash
+ssh ubuntu@<vm-public-ip>
+curl -fsSL https://cdn.coollabs.io/coolify/install.sh | sudo bash
+```
+
+When it finishes, open `http://<vm-public-ip>:8000` and **👤** create the
+admin account straight away (the first visitor to that page becomes the
+admin).
+
+### 4. Add the app
+
+Coolify's labels below are from Coolify v4 and may differ slightly between
+versions.
+
+1. **Projects → + Add** a project (e.g. `ragsec-demo`), open its environment,
+   then **+ New → Resource → Public Repository**.
+2. **Repository URL:** `https://github.com/Koushik-Saha/RAGSec-Scanner`,
+   **Branch:** `main`.
+3. **Build Pack:** `Dockerfile` (Dockerfile location `/Dockerfile`, base
+   directory `/`).
+4. **Ports Exposes:** `8000`. Leave **Ports Mappings** empty. Coolify's proxy
+   routes your domain to the container, and host port 8000 is already used by
+   Coolify's dashboard.
+5. **Domains:** your domain (e.g. `https://ragsec.example.org`, with a DNS A
+   record pointing at the VM) or the generated `sslip.io` address.
+6. **Environment Variables:** add the variables from the table above, e.g.
+   `RAGSEC_PROVIDER` = `groq`, `RAGSEC_MODEL` = `openai/gpt-oss-120b`,
+   `GROQ_API_KEY` = **👤** your key. Leave **Build Variable** *unchecked* for
+   all of them; they are runtime-only.
+7. **Health Check:** enable it with path `/health` and port `8000`.
+8. **Deploy.** The first build takes several minutes (PyTorch and the
+   embedding model). The deployment log should end with the container
+   becoming healthy and uvicorn listening on `0.0.0.0:8000`.
+
+**Updating:** click **Redeploy** after pushing to `main` (or enable automatic
+deploys through Coolify's GitHub App integration). **Changing the key:** edit
+`GROQ_API_KEY` under Environment Variables, then **Restart** (no rebuild
+needed). **Stopping:** **Stop** on the resource, or delete it.
 
 ---
 
-## Option B: Fly.io
+## Post-deploy smoke test
 
-1. **👤** Create an account at <https://fly.io> and add a payment method
-   (Fly.io requires one before launching apps).
-2. Install the `flyctl` command-line tool:
-   ```bash
-   brew install flyctl        # macOS; see https://fly.io/docs/flyctl/install/ for others
-   ```
-3. **👤** Log in (opens a browser window):
-   ```bash
-   fly auth login
-   ```
-4. From the repository folder, create the app without deploying yet. Pick an
-   app name that is free on Fly.io (it becomes `https://<name>.fly.dev`) and a
-   region code close to you (`fly platform regions` lists them):
-   ```bash
-   cd RAGSec-Scanner
-   fly launch --no-deploy --name ragsec-scanner-demo --region sjc
-   ```
-   If it asks whether to set up databases or other services, answer **No**.
-   It writes a `fly.toml` file.
-5. Replace the contents of `fly.toml` with the following (keep your own `app`
-   name and region):
+Replace `BASE` with your URL. The scan runs two probes: `context_bleed` makes
+no model call and `planted_secret_extraction` makes one, so the test costs one
+`/ask` call and one scan call.
+
+```bash
+BASE=https://ragsec.example.org
+
+curl -fsS "$BASE/health"
+# {"status":"ok"}
+
+curl -fsS -X POST "$BASE/ask" -H 'content-type: application/json' \
+  -d '{"question":"What is the daily meal allowance when travelling?"}'
+# JSON whose "text" gives the $60/day meal cap, plus "retrieved_chunk_ids"
+
+curl -fsS -X POST "$BASE/scan" -H 'content-type: application/json' \
+  -d '{"probe_ids":["planted_secret_extraction","context_bleed"]}'
+# JSON with "total": 2, "model": your RAGSEC_MODEL, and no "error" on either probe
+
+curl -fsS -o /dev/null -w '%{http_code}\n' "$BASE/report/html"   # 200
+curl -fsS -o /dev/null -w '%{http_code}\n' "$BASE/"              # 200 (demo page)
+```
+
+If `/ask` returns `503`, check the troubleshooting table below.
+
+Known quirk with `openai/gpt-oss-120b`: it often cites sources as
+`【chunk-id】` instead of `[chunk-id]`, which the citation parser does not
+read. Those answers show `"citations": []` and `"grounded": false` even when
+the answer is right.
+
+---
+
+## Other hosts
+
+Both build the same `Dockerfile` and need the same environment variables
+(see the table above).
+
+### Render
+
+1. **👤** Sign in at <https://dashboard.render.com>. Click **New + → Web
+   Service** and connect the GitHub repository `Koushik-Saha/RAGSec-Scanner`
+   (branch `main`). **Language:** Docker, **Dockerfile Path:**
+   `./Dockerfile`.
+2. **Instance Type:** 2 GB RAM (smaller instances run out of memory).
+3. **Environment Variables:** the provider variables from the table above,
+   plus `PORT` = `8000` (tells Render which port the container listens on).
+   **👤** Only the key owner should paste the key.
+4. **Advanced → Health Check Path:** `/health`. Then **Deploy Web Service**.
+5. Run the smoke test above against `https://<name>.onrender.com`.
+
+### Fly.io
+
+1. **👤** Create an account at <https://fly.io>, install `flyctl`, and run
+   `fly auth login`.
+2. From the repository folder:
+   `fly launch --no-deploy --name ragsec-scanner-demo --region sjc` (answer
+   **No** to databases).
+3. Replace `fly.toml` with (keep your own `app` name and region):
    ```toml
    app = "ragsec-scanner-demo"
    primary_region = "sjc"
@@ -117,7 +224,8 @@ else can be done by anyone following along.
      dockerfile = "Dockerfile"
 
    [env]
-     RAGSEC_MODEL = "claude-opus-5-5"
+     RAGSEC_PROVIDER = "groq"
+     RAGSEC_MODEL = "openai/gpt-oss-120b"
 
    [http_service]
      internal_port = 8000
@@ -138,36 +246,10 @@ else can be done by anyone following along.
      cpu_kind = "shared"
      cpus = 1
    ```
-   `fly.toml` contains no secrets and can be committed.
-   `auto_stop_machines` stops the machine when idle to save money; the first
-   request after a stop waits for it to start again (about 10–20 seconds).
-6. **👤** Store the API key as a secret (it is encrypted and never written to
-   `fly.toml`):
-   ```bash
-   fly secrets set ANTHROPIC_API_KEY=sk-ant-your-key-here
-   ```
-7. Deploy:
-   ```bash
-   fly deploy
-   ```
-   The first build takes several minutes. It finishes with a line like
-   `Visit your newly deployed app at https://ragsec-scanner-demo.fly.dev/`.
-8. Check it:
-   ```bash
-   fly status                                   # machine should be "started", checks "passing"
-   curl https://ragsec-scanner-demo.fly.dev/health
-   # {"status":"ok"}
-   fly open                                     # opens the demo page in a browser
-   ```
-9. If something is wrong, read the logs:
-   ```bash
-   fly logs
-   ```
-
-**Updating:** run `fly deploy` again after pulling changes. **Changing the
-key:** `fly secrets set ANTHROPIC_API_KEY=...` (restarts the app).
-**Stopping:** `fly scale count 0` to stop all machines, or
-`fly apps destroy ragsec-scanner-demo` to delete the app.
+   `fly.toml` contains no secrets.
+4. **👤** Store the key as a Fly secret (encrypted, never in `fly.toml`):
+   `fly secrets set GROQ_API_KEY=<your-groq-key>`.
+5. `fly deploy`, then run the smoke test against `https://<app>.fly.dev`.
 
 ---
 
@@ -175,19 +257,17 @@ key:** `fly secrets set ANTHROPIC_API_KEY=...` (restarts the app).
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Service restarts, logs show `Killed` or out-of-memory | Instance too small | Use 2 GB RAM |
-| `/ask` returns `503 not_configured` with "RAGSEC_MODEL is not set" | Missing variable | Set `RAGSEC_MODEL` |
-| `/ask` returns `503 not_configured` with "ANTHROPIC_API_KEY is not set" | Missing secret | Set `ANTHROPIC_API_KEY` |
-| `/ask` returns `503` "rejected the server's credentials" | Wrong or revoked key | **👤** Create a new key and update the secret |
-| `/ask` returns `503 model_rate_limited` | Anthropic rate limit | Wait and retry; check the key's limits in the Console |
-| `/scan` times out in the browser | Platform proxy timeout on long requests | Run fewer probes per request (see "Before you start") |
-| Render: "No open ports detected" | Port not set | Make sure `PORT=8000` is set |
+| Container restarts; logs show `Killed` or out-of-memory | Too little RAM | Give the VM/instance 2 GB or more |
+| Coolify dashboard or the app unreachable on Oracle | Port closed in the security list or the VM's iptables | Open the port in **both** places (Option A, step 2) |
+| `/ask` → `503 not_configured`, "RAGSEC_MODEL is not set" | Missing variable | Set `RAGSEC_MODEL` |
+| `/ask` → `503 not_configured`, "GROQ_API_KEY is not set …" | Key missing for the selected provider | Set the key named in the message (or fix `RAGSEC_PROVIDER`) |
+| `/ask` → `503 not_configured`, "RAGSEC_PROVIDER … is not supported" | Typo in the provider | Use `anthropic`, `groq`, `openrouter`, or `ollama` |
+| `/ask` → `503`, "rejected the server's credentials" | Wrong or revoked key | **👤** Create a new key and update the variable |
+| `/ask` → `502 model_api_error`, "The model API call failed (NotFoundError)" | Model not available to the key | Pick a model listed for your key |
+| `/ask` → `503 model_rate_limited` | Groq per-minute or daily limit | Wait; see "Groq free tier" above |
+| `/scan` times out | Proxy timeout on a long request | Run fewer probes per request |
+| Render: "No open ports detected" | Port not set | Set `PORT=8000` |
 
 ## After deploying
 
-**👤** Put the live URL at the top of `README.md` and commit it:
-
-```bash
-git commit -am "docs: live demo URL"
-git push
-```
+**👤** Put the live URL at the top of `README.md` and commit it.
