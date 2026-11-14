@@ -337,3 +337,26 @@ def test_real_probe_runs_through_api(api: TestClient) -> None:
     response = api.post("/scan", json={"probe_ids": ["context_bleed"]})
     assert response.status_code == 200
     assert response.json()["results"][0]["passed"] is True
+
+
+# --- shared model client --------------------------------------------------------------
+
+
+def test_requests_share_one_model_client(tmp_path: Path, monkeypatch) -> None:
+    """Pacing and the spent-budget stop live on the client, so it must be shared."""
+    built: list[FakeClient] = []
+
+    def make(settings: Settings) -> FakeClient:
+        client = FakeClient(cite_first("Port 4443 {cite}."))
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(answer_module, "make_client", make)
+    monkeypatch.setattr(probes_module, "PROBES", {"fake_1": fake_probe("fake_1", True)})
+    app = create_app(settings(tmp_path), client=None, embedder=FakeEmbedder())
+    with TestClient(app, raise_server_exceptions=False) as c:
+        assert c.post("/ask", json={"question": QUESTION}).status_code == 200
+        assert c.post("/ask", json={"question": QUESTION}).status_code == 200
+        assert c.post("/scan").status_code == 200
+    assert len(built) == 1
+    assert len(built[0].calls) == 2

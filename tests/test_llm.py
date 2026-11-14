@@ -350,3 +350,41 @@ def test_daily_budget_mid_scan_keeps_completed_probes(fake_openai) -> None:
     assert all(r.error and "tokens per day" in r.error for r in rest)
     assert calls["n"] == 2  # one answer, one daily-limit 429, then no more API calls
     assert (result.passed, result.total) == (1, 3)
+
+
+def test_concurrent_callers_get_spaced_slots() -> None:
+    """Callers that arrive together (clock not advanced) each wait for their own slot."""
+    sleeps: list[float] = []
+    queue = ["a", "b", "c"]
+    completions = FakeCompletions(lambda _: queue.pop(0))
+    raw = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    client = OpenAICompatibleClient(
+        raw, min_interval=2.1, max_retries=0, sleep=sleeps.append, clock=lambda: 100.0
+    )
+    for _ in range(3):
+        send(client)
+    assert sleeps == [pytest.approx(2.1), pytest.approx(4.2)]
+
+
+@pytest.mark.parametrize(
+    ("error", "cooldown"),
+    [
+        (_rate_limited("Rate limit reached", retry_after="3600"), 3600.0),
+        (
+            _rate_limited("Rate limit reached on tokens per day (TPD)"),
+            llm_module.BUDGET_COOLDOWN,
+        ),
+    ],
+)
+def test_spent_budget_clears_after_cooldown(error: Exception, cooldown: float) -> None:
+    clock = Clock()
+    client, completions = adapter([error, "back"], clock, min_interval=0)
+    with pytest.raises(openai.RateLimitError):
+        send(client)
+    clock.now += cooldown - 1
+    with pytest.raises(openai.RateLimitError):
+        send(client)  # still cooling down: no API call
+    assert len(completions.calls) == 1
+    clock.now += 2
+    assert send(client) == "back"
+    assert len(completions.calls) == 2

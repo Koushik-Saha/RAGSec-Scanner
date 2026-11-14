@@ -8,6 +8,7 @@ SDK to build a client or send a message.
 """
 
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -66,6 +67,7 @@ MIN_REQUEST_INTERVAL = 2.1  # seconds between requests: stays under 30 per minut
 RATE_LIMIT_RETRIES = 6  # retries for one request after HTTP 429
 BACKOFF_BASE = 2.0  # seconds; doubles each retry when the 429 has no retry-after
 BACKOFF_MAX = 60.0  # a longer wait than this means the budget is spent for now
+BUDGET_COOLDOWN = 900.0  # seconds to stop calling after a spent budget with no retry-after
 # Groq names the window in its 429 message, e.g. "tokens per day (TPD)".
 _DAILY_LIMIT = re.compile(r"per day|\((?:TPD|RPD)\)", re.IGNORECASE)
 
@@ -128,12 +130,13 @@ class _Response:
 class _ChatMessages:
     """messages.create() in the Anthropic shape, sent as an OpenAI chat completion.
 
-    Requests are spaced at least `min_interval` seconds apart. On HTTP 429 the
+    Requests are spaced at least `min_interval` seconds apart, across threads
+    (the API shares one client between concurrent requests). On HTTP 429 the
     request waits (retry-after, or exponential backoff) and retries up to
     `max_retries` times. A daily-budget 429, or one asking to wait longer than
-    BACKOFF_MAX, is raised at once, and every later request raises it again
-    without calling the API, so the rest of a scan records errors instead of
-    hammering a spent budget.
+    BACKOFF_MAX, is raised at once, and later requests raise it again without
+    calling the API until its retry-after (or BUDGET_COOLDOWN) has passed, so a
+    scan records errors instead of hammering a spent budget.
     """
 
     def __init__(
@@ -150,19 +153,30 @@ class _ChatMessages:
         self._max_retries = max_retries
         self._sleep = sleep
         self._clock = clock
-        self._last_request: float | None = None
+        self._lock = threading.Lock()
+        self._next_slot: float | None = None  # earliest start for the next request
         self.budget_exhausted: openai.RateLimitError | None = None
+        self._exhausted_until = 0.0
 
     def _pace(self) -> None:
-        if self._last_request is not None:
-            wait = self._last_request + self._min_interval - self._clock()
-            if wait > 0:
-                self._sleep(wait)
-        self._last_request = self._clock()
+        """Reserve the next request slot, then wait for it (outside the lock)."""
+        with self._lock:
+            now = self._clock()
+            start = now if self._next_slot is None else max(now, self._next_slot)
+            self._next_slot = start + self._min_interval
+        if start > now:
+            self._sleep(start - now)
+
+    def _check_budget(self) -> None:
+        with self._lock:
+            if self.budget_exhausted is None:
+                return
+            if self._clock() < self._exhausted_until:
+                raise self.budget_exhausted
+            self.budget_exhausted = None  # cooldown over: try the API again
 
     def _send(self, **kwargs: Any) -> Any:
-        if self.budget_exhausted is not None:
-            raise self.budget_exhausted
+        self._check_budget()
         attempt = 0
         while True:
             self._pace()
@@ -171,7 +185,11 @@ class _ChatMessages:
             except openai.RateLimitError as exc:
                 wait = _retry_after(exc)
                 if _DAILY_LIMIT.search(str(exc)) or (wait is not None and wait > BACKOFF_MAX):
-                    self.budget_exhausted = exc
+                    with self._lock:
+                        self.budget_exhausted = exc
+                        self._exhausted_until = self._clock() + (
+                            wait if wait is not None else BUDGET_COOLDOWN
+                        )
                     raise
                 if attempt >= self._max_retries:
                     raise

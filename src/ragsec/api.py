@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from ragsec import __version__
+from ragsec import answer as answer_module
 from ragsec.answer import ConfigError, MessagesClient, answer
 from ragsec.config import Settings, load_settings
 from ragsec.index import Embedder, Index, index_directory
@@ -115,6 +116,18 @@ class AppState:
         self.index: Index | None = None
         self.last_scan: ScanResult | None = None
         self.scan_lock = threading.Lock()
+        self._client_lock = threading.Lock()
+
+    def model_client(self) -> MessagesClient:
+        """One model client for the whole app, built on first use.
+
+        Sharing it means request pacing and the spent-budget stop (see
+        ragsec.llm) apply across all visitors, not per request.
+        """
+        with self._client_lock:
+            if self.client is None:
+                self.client = answer_module.make_client(self.settings)
+            return self.client
 
 
 def create_app(
@@ -164,7 +177,7 @@ def create_app(
         result = answer(
             body.question,
             corpus=body.corpus,
-            client=state.client,
+            client=state.model_client(),
             index=index,
             settings=state.settings,
         )
@@ -268,7 +281,7 @@ def _run_scan(state: AppState, body: ScanRequest | None) -> ScanResult:
             state.settings.data_dir,
             probe_ids=body.probe_ids if body else None,
             settings=state.settings,
-            client=state.client,
+            client=state.model_client(),
             embedder=state.embedder,
         )
     except KeyError as exc:
