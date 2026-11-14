@@ -11,7 +11,7 @@ import pytest
 
 import ragsec.answer as answer_module
 import ragsec.llm as llm_module
-from ragsec.answer import SYSTEM_PROMPT
+from ragsec.answer import REFUSAL_PHRASE, SYSTEM_PROMPT
 from ragsec.config import ConfigError, Settings, load_settings
 from ragsec.llm import OpenAICompatibleClient, make_client
 from ragsec.scan import run_scan
@@ -136,9 +136,10 @@ class FakeOpenAI:
     instances: list["FakeOpenAI"] = []
     reply: Any = ""
 
-    def __init__(self, *, base_url: str, api_key: str) -> None:
+    def __init__(self, *, base_url: str, api_key: str, max_retries: int) -> None:
         self.base_url = base_url
         self.api_key = api_key
+        self.max_retries = max_retries
         self.completions = FakeCompletions(FakeOpenAI.reply)
         self.chat = SimpleNamespace(completions=self.completions)
         FakeOpenAI.instances.append(self)
@@ -150,6 +151,7 @@ def fake_openai(monkeypatch: pytest.MonkeyPatch):
     FakeOpenAI.instances = []
     monkeypatch.setattr(llm_module.openai, "OpenAI", FakeOpenAI)
     monkeypatch.setattr(answer_module, "make_client", make_client)
+    monkeypatch.setattr(llm_module, "_sleep", lambda seconds: None)  # no real waiting
 
     def install(reply: Any) -> type[FakeOpenAI]:
         FakeOpenAI.reply = reply
@@ -189,6 +191,7 @@ def test_full_probe_run_through_openai_compatible_client(fake_openai) -> None:
     (client,) = fake.instances
     assert client.base_url == "https://api.groq.com/openai/v1"
     assert client.api_key == "gsk-test-not-real"
+    assert client.max_retries == 0  # the adapter owns retries
     request = client.completions.calls[0]
     assert request["model"] == "llama-test"
     assert request["messages"][0] == {"role": "system", "content": SYSTEM_PROMPT}
@@ -231,3 +234,119 @@ def test_openai_auth_error_stops_the_scan(fake_openai) -> None:
     fake_openai(openai.AuthenticationError("bad key", response=response, body=None))
     with pytest.raises(openai.AuthenticationError):
         run_scan(DATA, probe_ids=["benign_control"], settings=GROQ, embedder=FakeEmbedder())
+
+
+# --- pacing and rate limits -----------------------------------------------------
+
+
+def _rate_limited(message: str = "Rate limit reached", retry_after: str | None = None):
+    headers = {"retry-after": retry_after} if retry_after is not None else {}
+    response = httpx2.Response(429, request=_request(), headers=headers)
+    return openai.RateLimitError(message, response=response, body=None)
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def adapter(replies: list[Any], clock: Clock, **kwargs: Any) -> tuple[Any, FakeCompletions]:
+    """An OpenAICompatibleClient whose fake API returns `replies` in order."""
+    queue = list(replies)
+    completions = FakeCompletions(lambda _: queue.pop(0))
+    raw = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    kwargs.setdefault("min_interval", 2.1)
+    kwargs.setdefault("max_retries", 6)
+    client = OpenAICompatibleClient(raw, sleep=clock.sleep, clock=clock, **kwargs)
+    return client, completions
+
+
+def send(client: Any) -> str:
+    response = client.messages.create(
+        model="m", max_tokens=10, system="s", messages=[{"role": "user", "content": "q"}]
+    )
+    return response.content[0].text
+
+
+def test_requests_are_paced_under_30_per_minute() -> None:
+    clock = Clock()
+    client, _ = adapter(["a", "b", "c"], clock)
+    assert send(client) == "a"  # first request does not wait
+    clock.now += 0.5
+    assert send(client) == "b"
+    assert clock.sleeps == [pytest.approx(1.6)]
+    clock.now += 10
+    assert send(client) == "c"  # already spaced out: no extra wait
+    assert clock.sleeps == [pytest.approx(1.6)]
+
+
+def test_429_waits_retry_after_then_succeeds() -> None:
+    clock = Clock()
+    client, completions = adapter([_rate_limited(retry_after="7"), "ok"], clock)
+    assert send(client) == "ok"
+    assert len(completions.calls) == 2
+    assert clock.sleeps[0] == 7.0
+
+
+def test_429_without_retry_after_backs_off_exponentially() -> None:
+    clock = Clock()
+    client, _ = adapter([_rate_limited(), _rate_limited(), "ok"], clock, min_interval=0)
+    assert send(client) == "ok"
+    assert clock.sleeps == [2.0, 4.0]
+
+
+def test_429_gives_up_after_max_retries() -> None:
+    clock = Clock()
+    client, completions = adapter([_rate_limited()] * 3, clock, min_interval=0, max_retries=2)
+    with pytest.raises(openai.RateLimitError):
+        send(client)
+    assert len(completions.calls) == 3
+    # A per-minute limit is not a spent budget: the next request still goes out.
+    client.messages._client.chat.completions = FakeCompletions("later")
+    assert send(client) == "later"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _rate_limited("Rate limit reached on tokens per day (TPD): Limit 200000"),
+        _rate_limited("Rate limit reached", retry_after="3600"),
+    ],
+)
+def test_daily_budget_stops_further_requests(error: Exception) -> None:
+    clock = Clock()
+    client, completions = adapter([error, "never sent"], clock)
+    with pytest.raises(openai.RateLimitError):
+        send(client)
+    with pytest.raises(openai.RateLimitError):
+        send(client)
+    assert len(completions.calls) == 1  # no retries, no further calls
+    assert clock.sleeps == []
+
+
+def test_daily_budget_mid_scan_keeps_completed_probes(fake_openai) -> None:
+    calls = {"n": 0}
+
+    def reply(kwargs: dict[str, Any]) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return REFUSAL_PHRASE  # planted_secret_extraction: one call, passes
+        return _rate_limited("Rate limit reached on tokens per day (TPD)")
+
+    fake_openai(reply)
+    probe_ids = ["planted_secret_extraction", "benign_control", "citation_integrity"]
+    result = run_scan(DATA, probe_ids=probe_ids, settings=GROQ, embedder=FakeEmbedder())
+
+    first, *rest = result.results
+    assert first.error is None and first.passed is True
+    assert all(r.error and "tokens per day" in r.error for r in rest)
+    assert calls["n"] == 2  # one answer, one daily-limit 429, then no more API calls
+    assert (result.passed, result.total) == (1, 3)

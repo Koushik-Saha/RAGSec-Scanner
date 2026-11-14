@@ -7,6 +7,9 @@ not change with the provider. Nothing outside this module imports a provider
 SDK to build a client or send a message.
 """
 
+import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -58,6 +61,18 @@ FATAL_API_ERRORS: tuple[type[Exception], ...] = (
     openai.NotFoundError,
 )
 
+# Rate limits for OpenAI-compatible providers (free tiers such as Groq's).
+MIN_REQUEST_INTERVAL = 2.1  # seconds between requests: stays under 30 per minute
+RATE_LIMIT_RETRIES = 6  # retries for one request after HTTP 429
+BACKOFF_BASE = 2.0  # seconds; doubles each retry when the 429 has no retry-after
+BACKOFF_MAX = 60.0  # a longer wait than this means the budget is spent for now
+# Groq names the window in its 429 message, e.g. "tokens per day (TPD)".
+_DAILY_LIMIT = re.compile(r"per day|\((?:TPD|RPD)\)", re.IGNORECASE)
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
 
 def make_client(settings: Settings) -> MessagesClient:
     """Client for the configured provider, with its key from config only.
@@ -85,7 +100,14 @@ def make_client(settings: Settings) -> MessagesClient:
                 f"{spec.key_env} is not set but RAGSEC_PROVIDER is {provider!r} (see .env.example)"
             )
         key = secret.get_secret_value()
-    return OpenAICompatibleClient(openai.OpenAI(base_url=spec.base_url, api_key=key))
+    # Retries are handled by the adapter (pacing, backoff, daily-budget stop).
+    raw = openai.OpenAI(base_url=spec.base_url, api_key=key, max_retries=0)
+    return OpenAICompatibleClient(
+        raw,
+        min_interval=MIN_REQUEST_INTERVAL,
+        max_retries=RATE_LIMIT_RETRIES,
+        sleep=_sleep,
+    )
 
 
 # --- OpenAI-compatible adapter --------------------------------------------------
@@ -104,10 +126,59 @@ class _Response:
 
 
 class _ChatMessages:
-    """messages.create() in the Anthropic shape, sent as an OpenAI chat completion."""
+    """messages.create() in the Anthropic shape, sent as an OpenAI chat completion.
 
-    def __init__(self, client: Any) -> None:
+    Requests are spaced at least `min_interval` seconds apart. On HTTP 429 the
+    request waits (retry-after, or exponential backoff) and retries up to
+    `max_retries` times. A daily-budget 429, or one asking to wait longer than
+    BACKOFF_MAX, is raised at once, and every later request raises it again
+    without calling the API, so the rest of a scan records errors instead of
+    hammering a spent budget.
+    """
+
+    def __init__(
+        self,
+        client: Any,
+        *,
+        min_interval: float,
+        max_retries: int,
+        sleep: Callable[[float], None],
+        clock: Callable[[], float],
+    ) -> None:
         self._client = client
+        self._min_interval = min_interval
+        self._max_retries = max_retries
+        self._sleep = sleep
+        self._clock = clock
+        self._last_request: float | None = None
+        self.budget_exhausted: openai.RateLimitError | None = None
+
+    def _pace(self) -> None:
+        if self._last_request is not None:
+            wait = self._last_request + self._min_interval - self._clock()
+            if wait > 0:
+                self._sleep(wait)
+        self._last_request = self._clock()
+
+    def _send(self, **kwargs: Any) -> Any:
+        if self.budget_exhausted is not None:
+            raise self.budget_exhausted
+        attempt = 0
+        while True:
+            self._pace()
+            try:
+                return self._client.chat.completions.create(**kwargs)
+            except openai.RateLimitError as exc:
+                wait = _retry_after(exc)
+                if _DAILY_LIMIT.search(str(exc)) or (wait is not None and wait > BACKOFF_MAX):
+                    self.budget_exhausted = exc
+                    raise
+                if attempt >= self._max_retries:
+                    raise
+                self._sleep(
+                    wait if wait is not None else min(BACKOFF_BASE * 2**attempt, BACKOFF_MAX)
+                )
+                attempt += 1
 
     def create(
         self,
@@ -117,7 +188,7 @@ class _ChatMessages:
         system: str,
         messages: list[dict[str, str]],
     ) -> _Response:
-        completion = self._client.chat.completions.create(
+        completion = self._send(
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "system", "content": system}, *messages],
@@ -136,9 +207,28 @@ class _ChatMessages:
         )
 
 
+def _retry_after(exc: openai.RateLimitError) -> float | None:
+    """Seconds the provider asked us to wait, if it said."""
+    value = exc.response.headers.get("retry-after")
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None
+
+
 class OpenAICompatibleClient:
     """Wraps an openai.OpenAI client so it looks like the Anthropic client to answer()."""
 
-    def __init__(self, client: Any) -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        min_interval: float = 0.0,
+        max_retries: int = 0,
+        sleep: Callable[[float], None] = _sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.openai_client = client
-        self.messages = _ChatMessages(client)
+        self.messages = _ChatMessages(
+            client, min_interval=min_interval, max_retries=max_retries, sleep=sleep, clock=clock
+        )
