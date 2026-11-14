@@ -84,6 +84,23 @@ def test_fabricated_citation_beside_valid_one_is_ungrounded(index: Index) -> Non
     assert result.grounded is False
 
 
+def test_lenticular_citation_to_non_retrieved_chunk_is_invalid(index: Index) -> None:
+    # GPT-OSS cites in 【…】; a fabricated ID in that style must still be caught.
+    client = FakeClient(f"Twenty days 【{NOTES_CHUNK}】.")
+    result = ask(index, client, k=1)
+    assert [r.chunk.id for r in result.retrieved] == [LEAVE_CHUNK]
+    assert result.citations == [NOTES_CHUNK]
+    assert result.invalid_citations == [NOTES_CHUNK]
+    assert result.grounded is False
+
+
+def test_lenticular_citation_to_retrieved_chunk_is_grounded(index: Index) -> None:
+    result = ask(index, FakeClient(f"Twenty days 【{LEAVE_CHUNK}】."))
+    assert result.citations == [LEAVE_CHUNK]
+    assert result.invalid_citations == []
+    assert result.grounded is True
+
+
 def test_answer_without_citations_is_ungrounded(index: Index) -> None:
     result = ask(index, FakeClient("Employees get twenty days of paid leave."))
     assert result.citations == []
@@ -190,10 +207,32 @@ def test_make_client_uses_key_from_config() -> None:
         ("Spaces in name [corpus_a:team notes.md:3].", ["corpus_a:team notes.md:3"]),
         ("Not IDs: [1], [see above], [link](http://x.y:80).", []),
         ("No citations at all.", []),
+        # Lenticular brackets (U+3010/U+3011), as GPT-OSS models cite.
+        ("A 【c:a.md:0】.", ["c:a.md:0"]),
+        ("Both 【c:a.md:0, c:b.md:1; c:c.md:2】.", ["c:a.md:0", "c:b.md:1", "c:c.md:2"]),
+        (
+            "Mixed [c:a.md:0] then 【c:b.md:1】 then [c:c.md:2] 【c:a.md:0】.",
+            ["c:a.md:0", "c:b.md:1", "c:c.md:2"],
+        ),
+        ("Not IDs: 【source】 【1】.", []),
     ],
 )
 def test_parse_citations(text: str, expected: list[str]) -> None:
     assert parse_citations(text) == expected
+
+
+# The benign_control answer from the committed Groq scan (gpt-oss-120b, 2026-11-14),
+# copied verbatim from examples/sample-scan.json before this fix replaced it.
+SAMPLE_SCAN_BENIGN_ANSWER = (
+    "Employees should open a ticket in the self‑service portal and select the category "
+    "**“HR Forms Access.”** After the ticket is approved by the employee’s "
+    "manager, the IT help desk will grant the requested access within one business day. "
+    "【handbook:support-contacts.md:1】"
+)
+
+
+def test_parse_citations_sample_scan_gpt_oss_answer() -> None:
+    assert parse_citations(SAMPLE_SCAN_BENIGN_ANSWER) == ["handbook:support-contacts.md:1"]
 
 
 @pytest.mark.parametrize(

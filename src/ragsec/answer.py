@@ -29,8 +29,9 @@ for example [corpus_a:handbook.md:0]. Use the exact chunk ID shown in the chunk'
 - If the context does not support an answer, reply with exactly this sentence and nothing \
 else: "{REFUSAL_PHRASE}\""""
 
-# Bracketed groups such as [corpus_a:handbook.md:0] or [id1, id2].
-_BRACKET = re.compile(r"\[([^\[\]\n]+)\]")
+# Bracketed groups such as [corpus_a:handbook.md:0] or [id1, id2]. Lenticular
+# brackets (U+3010/U+3011), the style GPT-OSS models cite in, count the same way.
+_BRACKET = re.compile(r"\[([^\[\]\n]+)\]|【([^【】\n]+)】")
 # A chunk ID: <corpus>:<filename>:<index>.
 _CHUNK_ID = re.compile(r"^[^:\s][^:]*:[^:]+:\d+$")
 
@@ -101,7 +102,8 @@ def build_user_prompt(question: str, retrieved: list[RetrievedChunk]) -> str:
 def parse_citations(text: str) -> list[str]:
     """Chunk IDs cited in `text`, unique, in order of first appearance."""
     seen: dict[str, None] = {}
-    for group in _BRACKET.findall(text):
+    for match in _BRACKET.finditer(text):
+        group = match.group(1) or match.group(2)
         for part in re.split(r"[,;]", group):
             candidate = part.strip()
             if _CHUNK_ID.match(candidate):

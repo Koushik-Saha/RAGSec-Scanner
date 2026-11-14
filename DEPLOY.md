@@ -183,10 +183,9 @@ curl -fsS -o /dev/null -w '%{http_code}\n' "$BASE/"              # 200 (demo pag
 
 If `/ask` returns `503`, check the troubleshooting table below.
 
-Known quirk with `openai/gpt-oss-120b`: it often cites sources as
-`【chunk-id】` instead of `[chunk-id]`, which the citation parser does not
-read. Those answers show `"citations": []` and `"grounded": false` even when
-the answer is right.
+Note on `openai/gpt-oss-120b`: it often cites sources as `【chunk-id】`
+instead of `[chunk-id]`. The citation parser reads both styles, so those
+citations appear in `"citations"` and count toward `"grounded"`.
 
 ---
 
