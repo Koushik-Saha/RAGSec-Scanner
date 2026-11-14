@@ -4,7 +4,6 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-import anthropic
 from pydantic import BaseModel
 
 from ragsec import answer as answer_module
@@ -12,15 +11,8 @@ from ragsec import probes
 from ragsec.answer import ConfigError, MessagesClient
 from ragsec.config import Settings, load_settings
 from ragsec.index import Embedder
+from ragsec.llm import API_ERRORS, FATAL_API_ERRORS
 from ragsec.probes import Evidence, ProbeContext, ProbeResult
-
-# Errors that would hit every probe the same way: stop the scan instead of
-# recording ten identical failures.
-_FATAL_API_ERRORS = (
-    anthropic.AuthenticationError,
-    anthropic.PermissionDeniedError,
-    anthropic.NotFoundError,
-)
 
 
 class ScanResult(BaseModel):
@@ -70,9 +62,10 @@ def run_scan(
         for probe_id in selected:
             try:
                 results.append(probes.run_probe(probe_id, ctx))
-            except _FATAL_API_ERRORS:
+            except FATAL_API_ERRORS:
+                # Hits every probe the same way: stop instead of ten identical failures.
                 raise
-            except anthropic.APIError as exc:
+            except API_ERRORS as exc:
                 results.append(_error_result(probe_id, exc))
 
     passed = sum(r.passed for r in results)

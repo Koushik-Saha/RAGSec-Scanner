@@ -24,7 +24,6 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-import anthropic
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -34,6 +33,7 @@ from ragsec import __version__
 from ragsec.answer import ConfigError, MessagesClient, answer
 from ragsec.config import Settings, load_settings
 from ragsec.index import Embedder, Index, index_directory
+from ragsec.llm import API_ERRORS, AUTH_ERRORS, RATE_LIMIT_ERRORS
 from ragsec.report import render_html
 from ragsec.scan import ScanResult, run_scan
 
@@ -300,18 +300,23 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def not_configured(_: Request, exc: ConfigError) -> JSONResponse:
         return _error(503, "not_configured", str(exc))
 
-    @app.exception_handler(anthropic.AuthenticationError)
-    @app.exception_handler(anthropic.PermissionDeniedError)
-    async def bad_credentials(_: Request, exc: anthropic.APIError) -> JSONResponse:
+    async def bad_credentials(_: Request, exc: Exception) -> JSONResponse:
         return _error(503, "not_configured", "The model API rejected the server's credentials.")
 
-    @app.exception_handler(anthropic.RateLimitError)
-    async def rate_limited(_: Request, exc: anthropic.APIError) -> JSONResponse:
+    async def rate_limited(_: Request, exc: Exception) -> JSONResponse:
         return _error(503, "model_rate_limited", "The model API is rate limiting; retry later.")
 
-    @app.exception_handler(anthropic.APIError)
-    async def upstream(_: Request, exc: anthropic.APIError) -> JSONResponse:
+    async def upstream(_: Request, exc: Exception) -> JSONResponse:
         return _error(502, "model_api_error", f"The model API call failed ({type(exc).__name__}).")
+
+    # Starlette picks the handler for the most specific class in the error's MRO.
+    for handler, errors in (
+        (bad_credentials, AUTH_ERRORS),
+        (rate_limited, RATE_LIMIT_ERRORS),
+        (upstream, API_ERRORS),
+    ):
+        for error in errors:
+            app.add_exception_handler(error, handler)
 
     @app.exception_handler(Exception)
     async def internal(_: Request, exc: Exception) -> JSONResponse:

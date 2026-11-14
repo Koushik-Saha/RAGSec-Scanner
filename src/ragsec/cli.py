@@ -3,12 +3,12 @@
 from pathlib import Path
 from typing import Annotated
 
-import anthropic
 import typer
 
 from ragsec.answer import ConfigError, answer
 from ragsec.config import Settings, load_settings
 from ragsec.index import Index, index_directory
+from ragsec.llm import API_ERRORS
 from ragsec.report import report_dir_name, write_reports
 from ragsec.scan import ScanResult, format_summary, run_scan
 
@@ -54,8 +54,8 @@ def ask(
     except ConfigError as exc:
         typer.echo(f"Configuration error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
-    except anthropic.APIError as exc:
-        typer.echo(f"Anthropic API error: {exc}", err=True)
+    except API_ERRORS as exc:
+        typer.echo(f"Model API error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     typer.echo(result.text)
@@ -91,8 +91,8 @@ def _run_scan_or_exit(
     except KeyError as exc:
         typer.echo(f"Error: {exc.args[0]}", err=True)
         raise typer.Exit(code=2) from exc
-    except anthropic.APIError as exc:
-        typer.echo(f"Anthropic API error: {exc}", err=True)
+    except API_ERRORS as exc:
+        typer.echo(f"Model API error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
 

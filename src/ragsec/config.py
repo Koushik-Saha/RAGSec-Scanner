@@ -17,10 +17,18 @@ COLLECTION_NAME = "ragsec"
 DEFAULT_DATA_DIR = "./data"
 DEFAULT_CHROMA_DIR = "./chroma"
 DEFAULT_REPORTS_DIR = "./reports"
+DEFAULT_PROVIDER = "anthropic"
+
+
+class ConfigError(RuntimeError):
+    """Required configuration (API key, model, or provider) is missing or invalid."""
 
 
 class Settings(BaseModel):
+    provider: str = DEFAULT_PROVIDER  # see ragsec.llm.PROVIDERS
     anthropic_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
+    openrouter_api_key: SecretStr | None = None
     model: str | None = None
     data_dir: Path = Path(DEFAULT_DATA_DIR)
     chroma_dir: Path = Path(DEFAULT_CHROMA_DIR)
@@ -38,7 +46,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         load_dotenv(override=False)
         env = os.environ
     return Settings(
+        provider=(env.get("RAGSEC_PROVIDER") or DEFAULT_PROVIDER).strip().lower(),
         anthropic_api_key=env.get("ANTHROPIC_API_KEY") or None,
+        groq_api_key=env.get("GROQ_API_KEY") or None,
+        openrouter_api_key=env.get("OPENROUTER_API_KEY") or None,
         model=env.get("RAGSEC_MODEL") or None,
         data_dir=Path(env.get("RAGSEC_DATA_DIR") or DEFAULT_DATA_DIR),
         chroma_dir=Path(env.get("RAGSEC_CHROMA_DIR") or DEFAULT_CHROMA_DIR),

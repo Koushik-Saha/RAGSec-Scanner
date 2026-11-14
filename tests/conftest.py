@@ -56,7 +56,10 @@ def fake_embedder() -> FakeEmbedder:
 # --- isolation: tests never see real config or call the real API -------------
 
 _RAGSEC_ENV = [
+    "RAGSEC_PROVIDER",
     "ANTHROPIC_API_KEY",
+    "GROQ_API_KEY",
+    "OPENROUTER_API_KEY",
     "RAGSEC_MODEL",
     "RAGSEC_DATA_DIR",
     "RAGSEC_CHROMA_DIR",
@@ -83,7 +86,7 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch, request: pytest.Fixtur
     monkeypatch.setattr(config_module, "load_dotenv", lambda **_: False)
 
     def _no_real_client(*_: Any, **__: Any) -> Any:
-        raise AssertionError("tests must not build a real Anthropic client; inject FakeClient")
+        raise AssertionError("tests must not build a real model client; inject FakeClient")
 
     monkeypatch.setattr(answer_module, "make_client", _no_real_client)
 

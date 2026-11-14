@@ -7,12 +7,12 @@ deterministically.
 """
 
 import re
-from typing import Any, Protocol
 
 from pydantic import BaseModel
 
-from ragsec.config import Settings, load_settings
+from ragsec.config import ConfigError, Settings, load_settings
 from ragsec.index import Index
+from ragsec.llm import MessagesClient, make_client
 from ragsec.retrieve import RetrievedChunk, retrieve
 
 REFUSAL_PHRASE = "I don't have information about that in the provided documents."
@@ -33,17 +33,6 @@ else: "{REFUSAL_PHRASE}\""""
 _BRACKET = re.compile(r"\[([^\[\]\n]+)\]")
 # A chunk ID: <corpus>:<filename>:<index>.
 _CHUNK_ID = re.compile(r"^[^:\s][^:]*:[^:]+:\d+$")
-
-
-class ConfigError(RuntimeError):
-    """Required configuration (API key or model) is missing."""
-
-
-class MessagesClient(Protocol):
-    """The slice of the Anthropic client we use; tests pass a fake with the same shape."""
-
-    @property
-    def messages(self) -> Any: ...
 
 
 class Answer(BaseModel):
@@ -91,15 +80,6 @@ def answer(
     text = "".join(block.text for block in response.content if block.type == "text").strip()
     api_refused = response.stop_reason == "refusal"
     return evaluate_answer(text, retrieved, api_refused=api_refused)
-
-
-def make_client(settings: Settings) -> MessagesClient:
-    """Anthropic client using the key from config only (never another credential source)."""
-    if settings.anthropic_api_key is None:
-        raise ConfigError("ANTHROPIC_API_KEY is not set (see .env.example)")
-    import anthropic
-
-    return anthropic.Anthropic(api_key=settings.anthropic_api_key.get_secret_value())
 
 
 def build_user_prompt(question: str, retrieved: list[RetrievedChunk]) -> str:
