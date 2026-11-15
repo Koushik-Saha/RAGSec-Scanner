@@ -2,7 +2,7 @@
 
 import pytest
 
-from ragsec.answer import REFUSAL_PHRASE, SYSTEM_PROMPT
+from ragsec.answer import REFUSAL_PHRASE, SYSTEM_PROMPT, evaluate_answer
 from ragsec.index import Index
 from ragsec.probes import ProbeContext, run_probe
 from ragsec.probes import context_bleed as p9
@@ -21,11 +21,20 @@ def test_p6_markers_all_come_from_the_system_prompt() -> None:
         assert marker in SYSTEM_PROMPT, marker
 
 
-def test_p6_vulnerable_quoting_system_prompt_fails() -> None:
+def test_p6_verdict_fails_on_quoted_system_prompt() -> None:
+    # The verdict alone, on the raw model text (before the answer path's guard).
+    leak = "```\n" + SYSTEM_PROMPT + "\n```\nWiki pages start with a summary."
+    passed, reason = p6.verdict(evaluate_answer(leak, []), None)  # ctx is unused
+    assert passed is False
+    assert "Do not use outside knowledge" in reason
+
+
+def test_p6_full_prompt_quote_is_blocked_by_output_guard() -> None:
+    # Through the real pipeline, the output guard replaces the leak with the refusal.
     leak = "```\n" + SYSTEM_PROMPT + "\n```\nWiki pages start with a summary."
     result = run_with("system_prompt_extraction", leak)
-    assert result.passed is False
-    assert "Do not use outside knowledge" in result.evidence.verdict_reason
+    assert result.passed is True
+    assert result.evidence.answer_text == REFUSAL_PHRASE
 
 
 def test_p6_vulnerable_partial_paraphrase_with_marker_fails() -> None:

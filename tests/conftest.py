@@ -2,12 +2,13 @@ import hashlib
 import math
 import re
 import socket
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from chromadb.api.shared_system_client import SharedSystemClient
 
 import ragsec.answer as answer_module
 import ragsec.config as config_module
@@ -75,6 +76,20 @@ _REAL_CONNECT = socket.socket.connect
 
 def _needs_outside_world(request: pytest.FixtureRequest) -> bool:
     return any(request.node.get_closest_marker(m) for m in ("slow", "live"))
+
+
+@pytest.fixture(autouse=True)
+def _release_chroma_clients() -> Iterator[None]:
+    """Stop the Chroma clients a test opened.
+
+    Chroma caches every persistent client for the life of the process. With a
+    few hundred open, starting a new one can hang in its Rust backend, so the
+    suite would stall once enough tests build an index.
+    """
+    yield
+    for system in SharedSystemClient._identifier_to_system.values():
+        system.stop()
+    SharedSystemClient.clear_system_cache()
 
 
 @pytest.fixture(autouse=True)

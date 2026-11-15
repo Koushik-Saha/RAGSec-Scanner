@@ -3,10 +3,12 @@
 The model is told to answer only from the retrieved chunks, cite each claim
 as [chunk_id], and use a fixed refusal phrase when the context doesn't
 support an answer. Citations are then checked against the retrieved chunks
-deterministically.
+deterministically. An answer that reproduces the system prompt is replaced
+with the refusal sentence (output guard).
 """
 
 import re
+from itertools import groupby
 
 from pydantic import BaseModel
 
@@ -34,6 +36,26 @@ else: "{REFUSAL_PHRASE}\""""
 _BRACKET = re.compile(r"\[([^\[\]\n]+)\]|【([^【】\n]+)】")
 # A chunk ID: <corpus>:<filename>:<index>.
 _CHUNK_ID = re.compile(r"^[^:\s][^:]*:[^:]+:\d+$")
+
+# Output guard: an answer that reproduces SYSTEM_PROMPT is replaced with the
+# refusal. Matching is on runs of words, so case, whitespace, punctuation, and
+# markdown do not matter. The refusal sentence is not part of the reference,
+# because a model is told to say it.
+_GUARD_SPAN = 6  # words in the shortest fragment that counts
+_GUARD_LONG_FRAGMENT = 12  # one fragment this long is a leak on its own
+_GUARD_MIN_FRAGMENTS = 2  # or this many separate fragments
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower().replace("’", "").replace("'", ""))
+
+
+_PROMPT_SPANS = frozenset(
+    tuple(words[i : i + _GUARD_SPAN])
+    for part in SYSTEM_PROMPT.split(REFUSAL_PHRASE)
+    for words in [_words(part)]
+    for i in range(len(words) - _GUARD_SPAN + 1)
+)
 
 
 class Answer(BaseModel):
@@ -79,6 +101,8 @@ def answer(
         messages=[{"role": "user", "content": build_user_prompt(question, retrieved)}],
     )
     text = "".join(block.text for block in response.content if block.type == "text").strip()
+    if leaks_system_prompt(text):
+        text = REFUSAL_PHRASE  # never return the instructions, not even in part
     api_refused = response.stop_reason == "refusal"
     return evaluate_answer(text, retrieved, api_refused=api_refused)
 
@@ -109,6 +133,23 @@ def parse_citations(text: str) -> list[str]:
             if _CHUNK_ID.match(candidate):
                 seen.setdefault(candidate, None)
     return list(seen)
+
+
+def leaks_system_prompt(text: str) -> bool:
+    """True if `text` reproduces SYSTEM_PROMPT.
+
+    A leak is one verbatim fragment of at least _GUARD_LONG_FRAGMENT words, or
+    at least _GUARD_MIN_FRAGMENTS separate fragments of _GUARD_SPAN+ words.
+    """
+    words = _words(text)
+    covered = [False] * len(words)
+    for i in range(len(words) - _GUARD_SPAN + 1):
+        if tuple(words[i : i + _GUARD_SPAN]) in _PROMPT_SPANS:
+            covered[i : i + _GUARD_SPAN] = [True] * _GUARD_SPAN
+    fragments = [len(list(run)) for hit, run in groupby(covered) if hit]
+    return bool(fragments) and (
+        max(fragments) >= _GUARD_LONG_FRAGMENT or len(fragments) >= _GUARD_MIN_FRAGMENTS
+    )
 
 
 def contains_refusal(text: str) -> bool:
