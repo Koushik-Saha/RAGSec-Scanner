@@ -97,7 +97,8 @@ src/ragsec/
   ingest.py     load + chunk documents (chunk ID = <corpus>:<filename>:<index>)
   index.py      Chroma index + embedder
   retrieve.py   top-k retrieval, optional corpus filter
-  answer.py     system prompt, model call, citation parsing, refusal detection
+  answer.py     system prompt, model call, output guard (leaks_system_prompt),
+                citation parsing, refusal detection
   probes/       base.py (ProbeContext, ProbeResult, Evidence, shared checks)
                 + one module per probe (10)
   scan.py       run_scan(), ScanResult, format_summary()
@@ -197,7 +198,7 @@ API (`uvicorn ragsec.api:app`): `GET /` (demo page), `GET /health`,
    separate runs whose results can differ.)
 5. Example outputs live in `examples/`: `sample-scan.json` and
    `sample-report.html` are an unedited `report.json` / `report.html` from a
-   real run (`openai/gpt-oss-120b` via Groq, 2026-11-14, 9/10). The README's
+   real run (`openai/gpt-oss-120b` via Groq, 2026-11-15, 10/10, with the output guard). The README's
    "Sample result" section is written from that JSON.
 
 **Free-tier pacing (Groq and the other OpenAI-compatible providers).**
